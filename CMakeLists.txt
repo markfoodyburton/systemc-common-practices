@@ -19,16 +19,44 @@ FetchContent_MakeAvailable(cpm-cmake)
 include(${cpm-cmake_SOURCE_DIR}/cmake/CPM.cmake)
 
 cpmaddpackage("${GITHUB}TheLartians/PackageProject.cmake.git@1.4.1")
+# check if caller has already setup SystemC based on e.g. SYSTEMC_HOME
+
+if(DEFINED ENV{SYSTEMC_HOME})
+  cpmaddpackage(
+    NAME SystemCLanguage
+    SOURCE_DIR ENV{SYSTEMC_HOME}
+  )
+else ()
+  cpmaddpackage(
+    NAME SystemCLanguage
+    GIT_REPOSITORY  ${GITHUB}accellera-official/systemc.git
+    GIT_SHALLOW True
+    GIT_TAG main
+  )
+endif()
 
 cpmaddpackage(
-  NAME SystemCLanguage
-  GIT_REPOSITORY  ${GITHUB}accellera-official/systemc.git
+  NAME
+  RapidJSON
+  GIT_REPOSITORY
+  https://github.com/Tencent/rapidjson
+  GIT_TAG
+  e0f68a435610e70ab5af44fc6a90523d69b210b3
+  GIT_SHALLOW
+  FALSE
+  OPTIONS
+  "RAPIDJSON_BUILD_TESTS OFF"
+  "RAPIDJSON_BUILD_DOC OFF"
+  "RAPIDJSON_BUILD_EXAMPLES OFF")
+
+set(RapidJSON_DIR "${RapidJSON_BINARY_DIR}")
+
+cpmaddpackage(
+  NAME SystemCCCI
+  GIT_REPOSITORY  ${GITHUB}accellera-official/cci.git
   GIT_SHALLOW True
   GIT_TAG master
 )
-if(SystemCLanguage_ADDED)
-set(SystemCLanguage_FOUND TRUE)
-endif()
 
 cpmaddpackage(
   NAME initiator_id
