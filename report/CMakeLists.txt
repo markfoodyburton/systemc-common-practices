@@ -97,17 +97,15 @@ endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${spdlog_git_SRC_DIR}/include)
 if(TARGET SystemC::cci)
-  target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CCI)
   target_link_libraries(${PROJECT_NAME} PUBLIC SystemC::cci)
 endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC SystemC::systemc)
 set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 
-#No tests yet. WIP.
-#if(BUILD_TESTING AND ("${PROJECT_NAME}" STREQUAL "${CMAKE_PROJECT_NAME}"))
-#   enable_testing()
-#   add_subdirectory(tests)
-#endif()
+if(BUILD_TESTING AND ("${PROJECT_NAME}" STREQUAL "${CMAKE_PROJECT_NAME}"))
+   enable_testing()
+   add_subdirectory(tests)
+endif()
 
 add_library("scp::report::lib${PROJECT_NAME}" ALIAS ${PROJECT_NAME})
 packageproject(
