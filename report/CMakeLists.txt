@@ -48,13 +48,15 @@ cpmaddpackage(
   "RAPIDJSON_BUILD_DOC OFF"
   "RAPIDJSON_BUILD_EXAMPLES OFF")
 
-set(RapidJSON_DIR "${RapidJSON_BINARY_DIR}")
+  # nasty hack till dady takes the t-bird away.
+  set(RAPIDJSON_INCLUDE_DIRS "${RapidJSON_SOURCE_DIR}/include")
 
 cpmaddpackage(
   NAME SystemCCCI
   GIT_REPOSITORY  ${GITHUB}accellera-official/cci.git
   GIT_SHALLOW True
-  GIT_TAG master
+  GIT_TAG main
+  OPTIONS "SYSTEMCCCI_BUILD_TESTS OFF"
 )
 
 set(WITH_FMT "true" CACHE STRING "Include FMT library")
