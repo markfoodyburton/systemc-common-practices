@@ -15,7 +15,8 @@
 
 #include <scp/tlm_extensions/initiator_id.h>
 #include <scp/tlm_extensions/path_trace.h>
-#include <scp/report.h>
+#include <scp/cci_report_backend.h>
+#include <scp/scp_log.h>
 
 #include <systemc>
 #include <tlm>

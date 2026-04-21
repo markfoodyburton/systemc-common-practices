@@ -16,6 +16,9 @@
   permissions and limitations under the License.
 
 *****************************************************************************/
+/*
+ * scp/helpers.h -- TLM transaction formatting utilities.
+ */
 
 #include <systemc>
 #include <tlm>

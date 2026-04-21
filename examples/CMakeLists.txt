@@ -10,3 +10,6 @@ endmacro()
 
 run_test(smoke)
 run_test(smoke_report)
+run_test(smoke_report_sc_log)
+run_test(smoke_report_dynamic)
+run_test(scp_report_verification_test)

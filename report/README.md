@@ -1,225 +1,422 @@
+## SCP Reporting / Logging Library
 
+This library provides a logging backend (spdlog + CCI integration) and optional
+SCP macro compatibility for SystemC projects. It supports both SystemC 3
+(via an SC_LOG adaptation layer) and SystemC 4 (native SC_LOG).
 
-## Reporting macros
+### Headers
 
-The library offers the following macros. These macros ensure that, in general, a single 'if' is used to guard against output, so they can be used liberally throughout model code.
+| Header | Purpose | Who includes it |
+| ------ | ------- | --------------- |
+| `<scp/cci_report_backend.h>` | Backend: `scp::LogHandler`, `scp::LogConfig`, CCI verbosity | Top-level (`sc_main`) |
+| `<scp/scp_log.h>` | SCP macros: `SCP_LOGGER`, `SCP_INFO`, etc. | Modules using SCP macros |
+| `<scp/sc_log.h>` | Portable SC_LOG API (native on SystemC 4, adaptation on SystemC 3) | Modules using SC_LOG on SystemC 3 or 4 |
+| `<scp/report.h>` | **Deprecated** — includes both of the above + legacy aliases | Existing code (migration) |
 
-The library uses the Cmake Package Manager to fetch SystemC, CCI, RapidJSON, FMT Library, Spdlog.
-For SystemC and CCI by default we use the "Master" Branch. Use a package lock to set a specific version if you need to.
+On SystemC 4, `<systemc>` already provides SC_LOG natively. `<scp/sc_log.h>` is
+only needed for portability across SystemC 3 and 4.
 
-see: https://github.com/cpm-cmake/CPM.cmake
+### Include patterns
+
+| Use case | Modules include | Top level includes |
+| -------- | --------------- | ------------------ |
+| SCP macros (SystemC 3 or 4) | `<scp/scp_log.h>` | `<scp/cci_report_backend.h>` |
+| SC_LOG portable (SystemC 3 or 4) | `<scp/sc_log.h>` | `<scp/cci_report_backend.h>` |
+| SC_LOG native (SystemC 4 only) | `<systemc>` | `<scp/cci_report_backend.h>` |
 
 ----
 
-The Log levels used by the scp library are as follows :
+## Log Levels
 
-| SCP log <br /> level value | SCP_ report macro | Log levels name | Print Level | Equivelent sc_core |
-| --- | --- | --- | --- | --- |
-| 0 |   NONE    |   | sc_core::SC_NONE |
-| 1 | SCP_FATAL()    | FATAL    | sc_core::SC_LOW   | `sc_core::SC_FATAL` (Always printed)
-| 1 | SCP_ERROR()    | ERROR    | sc_core::SC_LOW   | `sc_core::SC_ERROR` (Always printed)
-| 1 | SCP_WARNING()  | WARNING  | sc_core::SC_LOW   | `sc_core::SC_WARNING`
-| 4 | SCP_INFO()     | INFO     | sc_core::SC_MEDIUM| `sc_core::SC_MEDIUM`
-| 5 | SCP_DEBUG()    | DEBUG    | sc_core::SC_HIGH  | `sc_core::SC_HIGH`
-| 6 | SCP_TRACE()    | TRACE    | sc_core::SC_FULL  | `sc_core::SC_FULL`
-| 7 | SCP_TRACEALL() | TRACEAL  | sc_core::SC_DEBUG | `sc_core::SC_DEBUG`
+| SC_LOG level | SCP macro | sc_core equivalent |
+| ------------ | --------- | ------------------ |
+| CRITICAL | `SCP_FATAL` / `SCP_ERR` | `SC_NONE` |
+| WARN | `SCP_WARN` | `SC_LOW` |
+| INFO | `SCP_INFO` | `SC_MEDIUM` |
+| DEBUG | `SCP_DEBUG` | `SC_HIGH` |
+| TRACE | `SCP_TRACE` / `SCP_TRACEALL` | `SC_DEBUG` / `SC_FULL` |
 
-Hence WARNINGS will be printed if the log level is set above 1. Hence setting a log_level of 3 will print Fatal, Error and Warning messages only.
+**Important differences from the old SCP macros:**
 
-## SCP_ report macros
+- `SCP_FATAL` and `SCP_ERR` now map to `SC_CRITICAL`. They are
+  **non-intrusive** — they do NOT call `abort()`, `throw`, or `sc_stop()`.
+  This matches the SC_LOG standard which states that logging "shall not
+  throw an exception or abort the program." If you need fatal/error behavior
+  with side effects, use `SC_REPORT_FATAL` / `SC_REPORT_ERROR` directly.
 
-The following SCP_ report macros can process an [{FMT}](https://github.com/fmtlib/fmt) formatter, or operate as a normal stream (accepting normal operators for output).
-```C
-    SCP_TRACE() << "My trace message";
-    SCP_TRACE()("The answer is {}.", 42);
+- `SCP_FATAL`, `SCP_ERR`, and `SCP_WARN` all map to levels that will be
+  printed when the CCI `log_level` is set to 1 or above (they all resolve
+  to `SC_LOW` verbosity or lower in the CCI mapping).
+
+## SC_LOG Macros (Native API)
+
+### Default handle (SC_LOG_HANDLE)
+
+On **SystemC 4**, every `sc_module` automatically has a default logging handle
+(provided by `sc_module` itself). No explicit declaration is needed.
+
+On **SystemC 3** (with the adaptation layer), `sc_module` does NOT provide a
+default handle. Modules that use `SC_INFO()`, `SC_WARN()`, etc. must
+declare one explicitly:
+
+```cpp
+SC_MODULE(my_module) {
+    SC_LOG_HANDLE();  // Required on SystemC 3
+    SC_CTOR(my_module) {
+        SC_INFO() << "hello";
+    }
+};
 ```
 
-The macros can take the following options:
+On SystemC 4, the explicit `SC_LOG_HANDLE()` shadows the inherited one.
+While this compiles, it creates a redundant member. When targeting
+SystemC 4 only, these declarations should be removed.
 
-```C
-    SCP_TRACE()
+For **portable code** (SystemC 3 and 4), prefer `SCP_LOGGER(())` from
+`<scp/scp_log.h>` instead. It creates a separate `_scp_log_cache_` variable
+that does not conflict with `sc_module`'s built-in handle on either version.
+
+### Handle forms
+
+```cpp
+SC_LOG_HANDLE()                      // Default handle (needed on SystemC 3)
+SC_LOG_HANDLE("tag")                 // Default handle with tag
+SC_LOG_HANDLE(name, "tag")           // Named handle with tag
+SC_LOG_HANDLE(name, "feat_a,feat_b") // Named handle with multiple features
 ```
-Uses the global default report level set up during initialization to determine whether the message is printed. (Defaults to 'SC_WARNING' in the absence of any initialization). No 'feature' information will be printed with the message.
 
+### Logging macros
 
-```C
-    SCP_TRACE("string")
+```cpp
+SC_INFO() << "message";              // Default handle
+SC_INFO(handle) << "message";        // Named handle
+SC_INFO("tag") << "message";         // String tag
+SC_WARN(handle, "tag") << "message"; // Handle with override tag
 ```
-The string represents a `feature` that is being reported upon. The message will be tagged with the feature name, and the feature name will be printed along with the message. The name will also be used to look up a `CCI` parameter with the extension `log_level`.
-Hence:
-```C
-   SCP_TRACE("top.mymodel")
+
+Format strings are supported if `<format>` or fmt is available:
+```cpp
+SC_INFO()("The answer is {}.", 42);
 ```
-will check for, in order of priority:
-    `top.mymodel.log_level`
-    `top.log_level`
-    `log_level`
-The first matching parameter will be used. Hence it is possible to set a top level `top.log_level` and overwrite that for specific models in the hierarchy (`top.mymodel.log_level`).
-If no parameters with matching names are found, the global default report level set up during initialization will be used (Defaults to 'SC_WARNING' in the absence of any initialization).
 
-Any string can be used, and it maybe a `std::string` or a `const char*`. Hence, users may create hierarchies of reporting features outside of the SystemC hierarchy itself. None the less, a convenience macro `SCMOD` is provided to use the current `SC_MODULE` name. Hence a typical example would be
-```C
-    SCP_TRACE(SCMOD) << "My trace message";
+## SCP Macros (Deprecated — Legacy Compatibility)
+
+The SCP macros translate to standard SC_LOG macros. They are provided for
+backward compatibility with existing codebases. **New code should use
+SC_LOG directly.**
+
+```cpp
+SCP_LOGGER()                         // Default logger
+SCP_LOGGER(())                       // Default logger (alternate form)
+SCP_LOGGER((D), "other")             // Named logger D with tag "other"
+SCP_LOGGER((D), "feat_a", "feat_b")  // Named logger D with multiple features
+
+SCP_INFO(()) << "default";           // Default cached logger
+SCP_INFO((D)) << "named";            // Named logger D
+SCP_INFO((), "tag") << "override";   // Default handle + tag override
+SCP_INFO((D), "tag") << "override";  // Named handle + tag override
+SCP_INFO(SCMOD) << "module name";    // String tag (uses global logger)
 ```
-Having established whether the feature should be printed or not, the result is cached in a lookup table. This lookup table will be used on all subsequent calls to any macro using the same feature string. (see thread safety below)
 
-This form of `SCP_TRACE` uses a global lookup table. This means there is a look-up 'cost' each time an SCP_ report function is used. Also see below for thread safety concerns. (Only one string is permitted in this form, because it will be 'hashed' and used to look up in the table)
+**Translation rules:**
 
-```C
-   SCP_TRACE((logger))  
+| SCP form | SC_LOG equivalent |
+| -------- | ----------------- |
+| `SCP_INFO(())` | `SC_INFO(_scp_log_cache_)` |
+| `SCP_INFO((D))` | `SC_INFO(_scp_log_cache_D)` |
+| `SCP_INFO((), "tag")` | `SC_INFO(_scp_log_cache_, "tag")` |
+| `SCP_INFO((D), "tag")` | `SC_INFO(_scp_log_cache_D, "tag")` |
+| `SCP_INFO(SCMOD)` | `SC_INFO(this->sc_core::sc_module::name())` |
+| `SCP_INFO()` | `SC_INFO()` |
+
+Note: `SCP_INFO(SCMOD)` expands to the string-tag form which uses the
+global logger, not the module's cached handle. See **String-Tag Form**
+above.
+
+## Migrating from SCP Macros to SC_LOG
+
+New code should use the SC_LOG API directly. The SCP macros are
+deprecated and will be removed in a future release.
+
+### Logger declarations
+
+| SCP form | SC_LOG equivalent |
+| -------- | ----------------- |
+| `SCP_LOGGER(())` | `SC_LOG_HANDLE()` |
+| `SCP_LOGGER((D), "tag")` | `SC_LOG_HANDLE(D, "tag")` |
+| `SCP_LOGGER((D), "a", "b")` | `SC_LOG_HANDLE(D, "a,b")` |
+| `SCP_LOGGER_VECTOR(v)` | `SC_LOG_HANDLE_VECTOR(v)` |
+| `SCP_LOGGER_VECTOR_PUSH_BACK(v, "t")` | `SC_LOG_HANDLE_VECTOR_PUSH_BACK(v, "t")` |
+
+### Logging calls
+
+| SCP form | SC_LOG equivalent |
+| -------- | ----------------- |
+| `SCP_INFO(())` | `SC_INFO()` |
+| `SCP_INFO((D))` | `SC_INFO(D)` |
+| `SCP_INFO((v[0]))` | `SC_INFO(v[0])` |
+
+### Special cases
+
+**`SCP_INFO(SCMOD)`** expands to `SC_INFO(this->sc_core::sc_module::name())`
+— the string-tag form. This uses the **global** logger, not the module's
+handle. It works correctly but is slower (no caching per module). To
+migrate: replace with `SC_INFO()` (which uses the module's default handle)
+and ensure `SC_LOG_HANDLE()` is declared in the module.
+
+**`SCP_INFO((), "tag")`** expands to `SC_INFO(_scp_log_cache_, "tag")`
+— the handle + tag override form. The SC_LOG equivalent is
+`SC_INFO(handle, "tag")` where `handle` is a named `SC_LOG_HANDLE`.
+There is no direct equivalent using the default handle without knowing
+its variable name. If a tag override is needed, declare a named handle:
+
+```cpp
+SC_LOG_HANDLE(my_h, "");           // or SC_LOG_HANDLE(my_h, "tag")
+SC_INFO(my_h, "override") << ...;  // handle + tag override
 ```
-In this form, the `logger` is expected to be within scope of the macro, it should be instantiated using the `SCP_LOGGER` macro. It will be used to store the debug level at which printing should occur and feature information which will be shared by all users of the `logger`. An alternate form makes use of the default logger (see below) : `SCP_TRACE(())`.
 
-```C
-    SCP_TRACE((logger),"string")
+## Multi-Feature Tags
+
+A logger can have multiple features specified as a comma-separated tag string.
+The CCI verbosity callback splits the tag and checks each feature individually.
+
+```cpp
+// SC_LOG style:
+SC_LOG_HANDLE(DMI, "dmi,debug");
+
+// SCP style (joined automatically):
+SCP_LOGGER((DMI), "dmi", "debug");
 ```
-Both forms can be used together, in which case the logging type used in the output will be the feature string, while the logger will be used to determine if the 
 
-```C
-   SCP_LOGGER()
-```
-The `SCP_LOGGER` macro is used to instantiate a logger for use in an SCP_ report macro. It is expected to be used in a class definition and the logger is expected to be used within that class. It should be constructed with the 'features' of logging for which it will be used. There are several forms of the SCP_LOGGER macro. With no arguments, the macro will construct a logger with the default name in the current scope. It is an error to use the macro more than once with no arguments.
+Setting `dmi.log_level=5` OR `debug.log_level=5` via CCI will enable
+this logger.
 
-By default, the logger will be initiated with some default features on the first use of any SCP_ report macro. This MUST happen within the SystemC context (on the SystemC thread) - it is safest to use an `SC_TRACE` macro (for instance) in the sc_module constructor.
+### Display name
 
-The default features are the SystemC hierarchial name (`this->name()`) and the C++ type name.  The C++ type name is demangled, and will be pre-pended with the SystemC hierarchical name. 
+When a logger has features, the tag (feature list) is shown as the display
+name in log output. When a logger has no features (empty tag), the module's
+hierarchical name (`scname`) is shown instead. This is controlled by SC_LOG's
+`GET_TAG` convention.
 
-Hence an sc_module `"my_mod"` instanced with the hierarchical name `top.a.b.mod` will automatically include the feature `top.a.b.mod.my_mod` and may be enabled using the parameter `top.a.b.mod.m_mod.log_level`. (See below for wildcard options).
+## CCI Log Level Values
 
+The `log_level` CCI parameter accepts three forms:
 
-```C
-   SCP_LOGGER("string"...)
-```
-In this variant, the variable umber of feature strings passes will be *prepended* to the list of default features such that the features listed take precedence over the default features. The strings may be either `std::string`'s or `const char*`'s.
+| Form | Example | Resolves to |
+| ---- | ------- | ----------- |
+| Small int (0–99) | `log_level=5` | 0=NONE, 1–3=WARN, 4=INFO, 5=DEBUG, 6+=TRACE |
+| Large int (≥100) | `log_level=500` | Direct `sc_verbosity` value (100=WARN, 200=INFO, 400=DEBUG, 500=TRACE) |
+| String | `log_level="DEBUG"` | Canonical names: NONE, CRITICAL, WARN, INFO, DEBUG, TRACE. Also accepts WARNING, FATAL, ERROR, TRACEALL, DBGTRACE. |
 
-The feature names will be pre-pended with the SystemC hierarchical name (at the point the first SCP_ report macro is used).
+All three forms are equivalent: `log_level=5`, `log_level=400`, and
+`log_level="DEBUG"` all resolve to DEBUG level.
 
-Hence a string `"spacial"` used in model `top.a.b` will be inserted interpreted as feature `top.a.b.special` and may be enabled using the parameter `top.a.b.special.log_level`. (See below for wildcard options).
+## String-Tag Form
 
+`SC_INFO("tag")` (1-arg string form) uses the **global** default logger,
+not the module's local handle. The verbosity is looked up via CCI using
+`"tag"` as the scope name. Each distinct tag is cached in a per-tag
+lookup table (thread-safe, `shared_mutex`-protected), so repeated calls
+with the same tag are efficient. Different string tags do not interfere
+with each other's cached levels.
 
-```C
-   SCP_LOGGER((my_logger))
-```
-In this form, `my_logger` will be used as the logger name, which should also be used as the logger name for the SCP_ report macros. The actual name of the instantiated variable will be 'mangled' such that there is no danger of name collision, hence short logger names are perfectly permissable, they may even be single digits (e.g. `SCP_LOGGER((1))` which would allow the use of report functions such as `SCP_TRACE((1))`. Omitting the logger name will be equivalent of the previous macros (hence `SCP_LOGGER(())` is the same as `SCP_LOGGER()`). These variants may be combined e.g. `SCP_LOGGER((1),"feature", "feature.sub_feature")`
+Note: `SC_INFO("tag")` does NOT use the module's logger. For module-aware
+logging with a tag override, use the 2-arg form:
+`SC_INFO(handle, "tag")`.
 
-## feature matching rules
+## Feature Matching Rules
 
-A logger can be initialized with a variable number of feature strings, each of which may be used to identify features that can then be enabled using CCI parameters. The hierarchical SystemC decomposition is used to find the best match for a feature. The feature (and corresponding log level) that best matches (i.e is the closest in the hierarchy to the feature) will be used. In addition, CCI parameters who's name starts with `*.` can be used to match several levels of hierarchy.
+The CCI verbosity callback builds a prioritized list of parameter names
+to check. It uses the logger's **scname** (module hierarchy), **tag**
+(comma-separated features), **C++ type name**, and **source filename**.
+More specific names (more dots) have higher priority. The first matching
+CCI parameter wins.
 
-Hence a module of type `mymod`, instanced with hierarchical name `top.foo` with feature `a.b` will search in order for:
+### Example
 
-|  Priority   |     |
-| --- | --- |
-|  4  |`top.foo.a.b.log_level`    |
-|  3  |`top.foo.a.log_level`      |
-|  2  |`top.foo.log_level`        |
-|  4  |`*.foo.a.b.log_level`      |
-|  3  |`*.foo.a.log_level`        |
-|  2  |`*.foo.log_level`          |
-|  3  |`top.a.b.log_level`        |
-|  2  |`top.a.log_level`          |
-|  1  |`top.log_level`            |
-|  2  |`a.b.log_level`            |
-|  2  |`*.b.log_level`            |
-|  1  |`mymod.log_level`          |
-|  1  |`*.log_level`              |
-|  0  |`log_level`                |
+Given:
+- Module type: `my_mod` (C++ class name)
+- Module instance: `top.foo` (SystemC hierarchy)
+- Source file: `my_mod.cpp`
+- Logger: `SC_LOG_HANDLE(D, "dmi")` or `SCP_LOGGER((D), "dmi")`
 
+Both forms produce tag `dmi` with scname `top.foo`. The CCI callback
+uses the scname, tag, C++ type name, and source filename to build a
+prioritized list of CCI parameter names to check:
 
+| Priority | Parameter | Matches on |
+| -------- | --------- | ---------- |
+| 3 | `top.foo.dmi.log_level` | hierarchy + feature |
+| 2 | `top.foo.my_mod.log_level` | hierarchy + type |
+| 2 | `top.foo.my_mod.cpp.log_level` | hierarchy + file |
+| 2 | `top.foo.log_level` | hierarchy |
+| 2 | `*.foo.dmi.log_level` | wildcard hierarchy + feature |
+| 2 | `*.foo.my_mod.log_level` | wildcard + type |
+| 2 | `*.foo.my_mod.cpp.log_level` | wildcard + file |
+| 2 | `*.foo.log_level` | wildcard hierarchy |
+| 1 | `top.dmi.log_level` | parent + feature |
+| 1 | `top.my_mod.log_level` | parent + type |
+| 1 | `top.my_mod.cpp.log_level` | parent + file |
+| 1 | `top.log_level` | parent |
+| 0 | `dmi.log_level` | feature alone |
+| 0 | `my_mod.log_level` | type alone |
+| 0 | `my_mod.cpp.log_level` | file alone |
+| 0 | `*.log_level` | wildcard |
+| 0 | `log_level` | global default |
 
+At each priority level, the first match wins. Features listed earlier in a
+comma-separated tag are checked before later ones.
+
+For a logger with multiple features (e.g. `SC_LOG_HANDLE(D, "dmi,debug")`),
+each feature generates its own set of entries. Setting `dmi.log_level=5`
+OR `debug.log_level=5` will enable the logger.
 
 ## Initialization
 
-### Recommended: Using LoggingGuard (RAII)
-```C
-   scp::LoggingGuard guard(config);
-```
-This is the recommended approach which automatically handles initialization and cleanup. The guard ensures that `shutdown_logging()` is called when it goes out of scope, preventing resource leaks and Windows DLL unload hangs.
+Use `scp::LogHandler` (RAII) to initialize and own the logging backend:
 
-The configuration structure can be constructed simply:
-```C
-    scp::LogConfig()
-```
-Convenience functions are provided on a configuration structure that return a modified structure, hence for example:
-```C
-    scp::LoggingGuard guard(
-        scp::LogConfig()
-            .logLevel(scp::log::DEBUG)
-            .msgTypeFieldWidth(20)
-            .fileInfoFrom(5)
-            .logAsync(false)
-            .printSimTime(false)
-            .logFileName(logfile));
+```cpp
+int sc_main(int argc, char* argv[]) {
+    scp::LogHandler handler(scp::LogConfig()
+        .logLevel(scp::log::DEBUG)
+        .msgTypeFieldWidth(20)
+        .logFileName("/tmp/log.txt"));
+
+    // ... simulation ...
+    // Logging is shut down automatically when handler goes out of scope
+    return 0;
+}
 ```
 
-### Alternative: Manual initialization
-```C
-   scp::init_logging(config);
-   // ... your code ...
-   scp::shutdown_logging();
+`LogHandler` owns the spdlog loggers, installs the `sc_report_handler`
+callback, and registers the CCI verbosity function. On destruction it
+flushes all pending messages and shuts down spdlog.
+
+### LogConfig options
+
+| Option | Method | Default |
+| ------ | ------ | ------- |
+| Log level | `logLevel(scp::log)` | `WARN` |
+| Message type field width | `msgTypeFieldWidth(unsigned)` | 24 |
+| Print system time | `printSysTime(bool)` | false |
+| Print simulation time | `printSimTime(bool)` | true |
+| Print delta cycles | `printDelta(bool)` | false |
+| Print severity level | `printSeverity(bool)` | true |
+| Colored output | `coloredOutput(bool)` | true |
+| Log file name | `logFileName(std::string)` | (none) |
+| Filter regex | `logFilterRegex(std::string)` | (none) |
+| Async logging | `logAsync(bool)` | true |
+| File info from level | `fileInfoFrom(int)` | `SC_INFO` |
+| Report only first error | `reportOnlyFirstError(bool)` | false |
+| Display name style | `displayNameStyle(scp::DisplayName)` | `AUTO` |
+
+### Display name styles
+
+The `displayNameStyle` option controls what is shown as the message type
+in log output:
+
+| Style | Display | Example |
+| ----- | ------- | ------- |
+| `AUTO` | tag if non-empty, else scname | `dmi,trace` (or `top.prod` if no tag) |
+| `TAG` | tag as provided by SC_LOG | `dmi,trace` (or `top.prod` if no tag) |
+| `SCNAME` | module hierarchy, falls back to tag | `top.prod` |
+| `FEATURES` | always the feature/tag string | `dmi,trace` |
+| `FULL` | tag and scname | `dmi,trace [top.prod]` |
+
+### Runtime control
+
+```cpp
+scp::set_logging_level(scp::log::TRACE);
+scp::log level = scp::get_logging_level();
+scp::set_cycle_base(sc_core::sc_time(1, sc_core::SC_NS));
+scp::set_display_name_style(scp::DisplayName::FULL);
 ```
-If you use `init_logging()` directly, you MUST call `shutdown_logging()` before application exit to properly clean up logging resources.
 
-| Use                                                        |   method                                   |  Default
-| ---- | ---- | --- |
-| set the logging level                                      |  `logLevel(int)`                | WARNING (3) |
-| define the width of the message field, 0 to disable,  <br />`std::numeric_limits<unsigned>::max()` for arbitrary width     |  ` msgTypeFieldWidth(unsigned)`  | | 
-| enable/disable printing of system time |    `printSysTime(bool)`       | true |
-| enable/disable printing of simulation time |   `printSimTime(bool)`      | true |
-| enable/disable printing delta cycles       |  `printDelta(bool)`          | true |
-| enable/disable printing of severity level  |  `printSeverity(bool)`       | true |
-| enable/disable colored output              |  `coloredOutput(bool)`        | true |
-| set the file name for the log output file  |  `logFileName([const] std::string&)`  |  |
-| set the regular expression to filter the output  |  `logFilterRegex([const] std::string&)` |  |
-| enable/disable asynchronous output (write to file in separate thread  |  `logAsync(bool)` | true |
-| print the file name from this log level |  `fileInfoFrom(int)` | sc_core::SC_INFO (4) |
-| disable/enable the suppression of all error messages after the first  |    `reportOnlyFirstError(bool)` | true |
+### Dynamic verbosity control
 
-## Thread safety
+Logger verbosity levels are cached after the first CCI lookup for
+performance. To change verbosity during simulation:
 
-None of the macro's are thread safe. SCP_LOGGER *must* be used within a SystemC module context. The SCP_ report macros MAY be used outside of a SystemC module context, and may be used on separate threads. However they *must* first be used on the SystemC thread within a module context. 
+```cpp
+// Reset all caches — forces re-query of CCI params on next log statement
+scp::reset_logging();
 
-Hence it is recommended that every sc_module constructor includes something like:
-```C
-    SCP_TRACE(()) << "Constructor";
+// Directly set verbosity for loggers matching a name (scname or feature).
+// Bypasses CCI — takes effect immediately, no reset needed.
+scp::set_log_level("top.prod", scp::log::CRITICAL);  // silence producer
+scp::set_log_level("dmi", scp::log::DEBUG);           // enable dmi feature
 ```
-(This will print the module hierarchy name as well as other information so the short message string is still useful.)
 
-This is equally true whether using a local 'logger' or the global lookup table. When using the global lookup table, in separate threads, care has to be taken that NO logger is added once reporting starts on the non SystemC thread as this could potentially corrupt the lookup table (which is only thread safe for multiple reads). In general, it is highly recommended to use the `(logger)` form for such cases.
+`set_log_level` matches against the module hierarchy name (scname) and
+feature tags. Multiple loggers may match the same name.
 
-## Recommendations
+### Computed tags
 
-The recommended way to use this library is:
+For components whose identity depends on runtime information (e.g.
+registers whose name depends on their position in the hierarchy),
+declare a string member before the logger and pass it as the tag.
+The member initialisation order guarantees the tag string is available
+when the handle is constructed.
 
-For Systems that are not using CCI parameters, use the SCP_ report macros with no parameters, either with or without a top level initialization. e.g. `SCP_TRACE() << "your message";`
+```cpp
+// SC_LOG style:
+SC_MODULE(my_device) {
+    std::string m_reg_name;
+    SC_LOG_HANDLE(reg_h, m_reg_name.c_str());
 
-For modules that need very occasional reporting can use the "string" form of the SCP_ report macros, ideally using SCMOD. e.g. `SCP_TRACE(SCMOD) << "your message";`
+    SC_CTOR(my_device)
+        : m_reg_name(std::string(name()) + ".control_reg")
+    {
+        SC_INFO(reg_h) << "register initialized";
+    }
+};
 
-For modules that either use a lot of reporting, or require multiple threads, use the `(logger)` form, e.g. `SCP_TRACE(()) << "your message";`. This will require instantiating the logger which can be done with `SCP_LOGGER(())` in the class. 
+// SCP style:
+class my_register {
+    std::string m_log_name;
+    SCP_LOGGER((), m_log_name.c_str());
 
-For Systems and modules that have specific features which do not align with the module hierarchy, the `(logger)` form should be used, with additional feature strings.
-
-For the user, reporting can be enabled using CCI parameters. This can be achieved in most cases on the command line. To enable or disable specific modules in the hierarchy the full hierarchy name can be used e.g. `-p top.a.b.my_module.log_level=5`. To enable all instances of a specific model the wildcard can be used e.g. `-p *.model.log_level=5`. A global 'default' can be provided at the top level.
-
-
-## Advanced Arrays
-
-Sometimes it's important to use both a 'cached' approach, and to allow the cache to be (locally) dynamic. For instance as now client devices are added to a tlm multi-port, it may be important to log messages per client. To achieve this 2 macros are provided:
-
-```C
-    SCP_LOGGER_VECTOR(NAME)
+    my_register(const std::string& name)
+        : m_log_name(name)
+    {
+        SCP_TRACE(()) << "constructed";
+    }
+};
 ```
-This instantiates a vector of loggers (with the base name `NAME`).
 
-```C
-    SCP_LOGGER_VECTOR_PUSH_BACK(NAME, "features"... )
+## Logger Vectors
+
+For dynamic per-client logging (e.g. TLM multi-ports):
+
+```cpp
+// SC_LOG style:
+SC_LOG_HANDLE_VECTOR(vec);
+SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "client0");
+SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "client1");
+SC_INFO(vec[0]) << "from client 0";
+
+// SCP style:
+SCP_LOGGER_VECTOR(vec);
+SCP_LOGGER_VECTOR_PUSH_BACK(vec, "client0");
+SCP_LOGGER_VECTOR_PUSH_BACK(vec, "client1");
+SCP_INFO((vec[0])) << "from client 0";
 ```
-This will push_back a new logger to the logger vector, initialized with the features listed.
-From this point on any of the SCP_ reporting macro's can be used with the form `SCP_INFO((NAME[i]))`
+
+## Thread Safety
+
+Logger macros are not thread safe. `SCP_LOGGER` / `SC_LOG_HANDLE` must be
+used within a SystemC module context. Logging macros may be used on separate
+threads but must first be used on the SystemC thread within a module context.
+
+Recommended: include a log statement in every `sc_module` constructor:
+```cpp
+SCP_TRACE(()) << "Constructor";
+```
 
 ## Utilities
 
-A utility function is provided to list all the logging parameters available in the system. This can be used for help messages for instance.
-```C
-    std::vector<std::string> get_logging_parameters();
+```cpp
+std::vector<std::string> scp::get_logging_parameters();
 ```
+
+Returns all CCI parameter names used for log level lookups.

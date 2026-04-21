@@ -20,26 +20,35 @@
  *      Author: eyck@minres.com
  */
 
-#include <scp/report.h>
+#include <scp/cci_report_backend.h>
 #include <array>
 #include <chrono>
 #include <fstream>
+#include <numeric>
+#include <sstream>
 #include <systemc>
 #ifdef HAS_CCI
 #include <cci_configuration>
 #endif
 #include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
 #include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <tuple>
-#include <unordered_map>
 #if defined(__GNUC__) || defined(__clang__)
 #define likely(x)   __builtin_expect(x, 1)
 #define unlikely(x) __builtin_expect(x, 0)
-#else
+#endif
+#ifdef __GNUG__
+#include <cstdlib>
+#include <memory>
+#include <cxxabi.h>
+#endif
+#if !defined(likely)
 #define likely(x)   x
 #define unlikely(x) x
 #endif
@@ -50,21 +59,16 @@
 #endif
 
 namespace {
-// Making this thread_local could cause thread copies of the same cache
-// entries, but more likely naming will be thread local too, and this avoids
-// races in the unordered_map
-
-#ifdef DISABLE_REPORT_THREAD_LOCAL
-std::unordered_map<uint64_t, sc_core::sc_verbosity> lut;
-#else
-thread_local std::unordered_map<uint64_t, sc_core::sc_verbosity> lut;
-#endif
 
 #ifdef HAS_CCI
 cci::cci_originator scp_global_originator("scp_reporting_global");
 #endif
 
 std::set<std::string> logging_parameters;
+std::multimap<std::string, sc_core::sc_log_logger_cache*> logger_caches;
+std::mutex logger_caches_mutex;
+std::unordered_map<std::string, sc_core::sc_log_level> tag_lut;
+std::shared_mutex tag_lut_mutex;
 
 struct ExtLogConfig : public scp::LogConfig {
     std::shared_ptr<spdlog::logger> file_logger;
@@ -78,10 +82,6 @@ struct ExtLogConfig : public scp::LogConfig {
     auto match(const char* type) -> bool { return regex_search(type, reg_ex); }
 };
 
-/* normally put the config in thread local. If two threads try to use logging
- * they would both need to init the config from both threads. The alternative
- * is to switch on this define, but then care has to be taken not to
- * (re)initialize from different threads which would then be unsafe.*/
 #ifdef DISABLE_REPORT_THREAD_LOCAL
 ExtLogConfig log_cfg;
 #else
@@ -157,6 +157,54 @@ auto time2string(const sc_core::sc_time& t) -> std::string {
     }
     return oss.str();
 }
+/* Get the display name for a log message based on the DisplayName setting. */
+inline const char* get_display_name(const sc_core::sc_report& rep) {
+    auto* lc = sc_core::sc_log_logger_cache::get_current();
+    switch (log_cfg.display_name) {
+    case scp::DisplayName::TAG:
+        return rep.get_msg_type();
+    case scp::DisplayName::SCNAME:
+        if (lc && !lc->scname.empty())
+            return lc->scname.data();
+        return rep.get_msg_type();
+    case scp::DisplayName::FEATURES:
+        if (lc && !lc->tag.empty())
+            return lc->tag.data();
+        return rep.get_msg_type();
+    case scp::DisplayName::FULL: {
+        if (lc && (!lc->scname.empty() || !lc->tag.empty())) {
+            static thread_local std::string full_name;
+            full_name.clear();
+            if (!lc->tag.empty())
+                full_name = std::string(lc->tag);
+            if (!lc->scname.empty()) {
+                if (!full_name.empty())
+                    full_name += " [";
+                full_name += std::string(lc->scname);
+                if (!lc->tag.empty())
+                    full_name += "]";
+            }
+            return full_name.c_str();
+        }
+        return rep.get_msg_type();
+    }
+    case scp::DisplayName::AUTO:
+    default:
+        /* Prefer tag (explicit logger identity) when available.
+         * Fall back to scname (module hierarchy) when the tag is empty
+         * and the msg_type matches scname (i.e. came from GET_TAG).
+         * Leave msg_type as-is for explicit overrides like
+         * SC_REPORT_INFO("ext test", ..) or SC_WARN(handle, "My.Name"). */
+        if (lc) {
+            if (!lc->tag.empty())
+                return lc->tag.data();
+            if (!lc->scname.empty() && lc->scname == rep.get_msg_type())
+                return lc->scname.data();
+        }
+        return rep.get_msg_type();
+    }
+}
+
 auto compose_message(const sc_core::sc_report& rep, const scp::LogConfig& cfg)
     -> const std::string {
     if (rep.get_severity() > sc_core::SC_INFO ||
@@ -190,13 +238,13 @@ auto compose_message(const sc_core::sc_report& rep, const scp::LogConfig& cfg)
         if (unlikely(rep.get_id() >= 0))
             os << "("
                << "IWEF"[rep.get_severity()] << rep.get_id() << ") "
-               << rep.get_msg_type() << ": ";
+               << get_display_name(rep) << ": ";
         else if (cfg.msg_type_field_width) {
             if (cfg.msg_type_field_width ==
                 std::numeric_limits<unsigned>::max())
-                os << rep.get_msg_type() << ": ";
+                os << get_display_name(rep) << ": ";
             else
-                os << padded(rep.get_msg_type(), cfg.msg_type_field_width)
+                os << padded(get_display_name(rep), cfg.msg_type_field_width)
                    << ": ";
         }
         if (*rep.get_msg())
@@ -239,6 +287,12 @@ inline void log2logger(spdlog::logger& logger, const sc_core::sc_report& rep,
         case sc_core::SC_HIGH:
             logger.debug(msg);
             break;
+        case sc_core::SC_LOW:
+            logger.warn(msg);
+            break;
+        case sc_core::SC_NONE:
+            logger.critical(msg);
+            break;
         default:
             logger.info(msg);
             break;
@@ -258,73 +312,46 @@ inline void log2logger(spdlog::logger& logger, const sc_core::sc_report& rep,
     }
 }
 
-inline void log2logger(spdlog::logger& logger, scp::log lvl,
-                       const std::string& msg) {
-    switch (lvl) {
-    case scp::log::DBGTRACE:
-    case scp::log::TRACE:
-        logger.trace(msg);
-        return;
-    case scp::log::DEBUG:
-        logger.debug(msg);
-        return;
-    case scp::log::INFO:
-        logger.info(msg);
-        return;
-    case scp::log::WARNING:
-        logger.warn(msg);
-        return;
-    case scp::log::ERROR:
-        logger.error(msg);
-        return;
-    case scp::log::FATAL:
-        logger.critical(msg);
-        return;
-    default:
-        break;
-    }
-}
-
 void report_handler(const sc_core::sc_report& rep,
                     const sc_core::sc_actions& actions) {
     thread_local bool sc_stop_called = false;
     if (actions & sc_core::SC_DO_NOTHING)
         return;
-    // If logging has been shut down, silently ignore log messages
-    // This can happen during static destruction when LoggingGuard is destroyed
-    // before other static objects that log in their destructors
-    if (!log_cfg.console_logger)
-        return;
-    if (rep.get_severity() == sc_core::SC_INFO ||
-        !log_cfg.report_only_first_error ||
-        sc_core::sc_report_handler::get_count(sc_core::SC_ERROR) < 2) {
-        if ((actions & sc_core::SC_DISPLAY) &&
-            (!log_cfg.file_logger || get_verbosity(rep) < sc_core::SC_HIGH))
-            log2logger(*log_cfg.console_logger, rep, log_cfg);
-        if ((actions & sc_core::SC_LOG) && log_cfg.file_logger) {
-            scp::LogConfig lcfg(log_cfg);
-            lcfg.print_sim_time = true;
-            if (!lcfg.msg_type_field_width)
-                lcfg.msg_type_field_width = 24;
-            log2logger(*log_cfg.file_logger, rep, lcfg);
+    /* Log the message if the logging backend is active */
+    if (log_cfg.console_logger) {
+        if (rep.get_severity() == sc_core::SC_INFO ||
+            !log_cfg.report_only_first_error ||
+            sc_core::sc_report_handler::get_count(sc_core::SC_ERROR) < 2) {
+            if ((actions & sc_core::SC_DISPLAY) &&
+                (!log_cfg.file_logger ||
+                 get_verbosity(rep) < sc_core::SC_HIGH))
+                log2logger(*log_cfg.console_logger, rep, log_cfg);
+            if ((actions & sc_core::SC_LOG) && log_cfg.file_logger) {
+                scp::LogConfig lcfg(log_cfg);
+                lcfg.print_sim_time = true;
+                if (!lcfg.msg_type_field_width)
+                    lcfg.msg_type_field_width = 24;
+                log2logger(*log_cfg.file_logger, rep, lcfg);
+            }
         }
     }
+    /* Always handle actions regardless of logging state for the normal sc_report_ path */
     if (actions & sc_core::SC_STOP) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-            static_cast<unsigned>(log_cfg.level) * 10));
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(static_cast<unsigned>(log_cfg.level)));
         if (sc_core::sc_is_running() && !sc_stop_called) {
             sc_core::sc_stop();
             sc_stop_called = true;
         }
     }
     if (actions & sc_core::SC_ABORT) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-            static_cast<unsigned>(log_cfg.level) * 20));
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(static_cast<unsigned>(log_cfg.level)));
         abort();
     }
     if (actions & sc_core::SC_THROW) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-            static_cast<unsigned>(log_cfg.level) * 20));
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(static_cast<unsigned>(log_cfg.level)));
         throw rep;
     }
     if (sc_core::sc_time_stamp().value() && !sc_core::sc_is_running()) {
@@ -334,42 +361,40 @@ void report_handler(const sc_core::sc_report& rep,
     }
 }
 
-// BKDR hash algorithm
-auto char_hash(char const* str) -> uint64_t {
-    constexpr unsigned int seed = 131; // 31  131 1313 13131131313 etc//
-    uint64_t hash = 0;
-    while (*str) {
-        hash = (hash * seed) + (*str);
-        str++;
-    }
-    return hash;
-}
 } // namespace
 
-static const std::array<sc_core::sc_severity, 8> severity = {
-    sc_core::SC_FATAL,   // scp::log::NONE
-    sc_core::SC_FATAL,   // scp::log::FATAL
-    sc_core::SC_ERROR,   // scp::log::ERROR
-    sc_core::SC_WARNING, // scp::log::WARNING
-    sc_core::SC_INFO,    // scp::log::INFO
-    sc_core::SC_INFO,    // scp::log::DEBUG
-    sc_core::SC_INFO,    // scp::log::TRACE
-    sc_core::SC_INFO     // scp::log::TRACEALL
-};
-static const std::array<sc_core::sc_verbosity, 8> verbosity = {
-    sc_core::SC_NONE,   // scp::log::NONE
-    sc_core::SC_LOW,    // scp::log::FATAL
-    sc_core::SC_LOW,    // scp::log::ERROR
-    sc_core::SC_LOW,    // scp::log::WARNING
-    sc_core::SC_MEDIUM, // scp::log::INFO
-    sc_core::SC_HIGH,   // scp::log::DEBUG
-    sc_core::SC_FULL,   // scp::log::TRACE
-    sc_core::SC_DEBUG   // scp::log::TRACEALL
-};
+/* Convert CCI integer or string values to sc_verbosity.
+ *   0-99:  small int (0=NONE, 1-3=WARN, 4=INFO, 5=DEBUG, 6+=TRACE)
+ *   >=100: sc_verbosity value (100=WARN, 200=INFO, 400=DEBUG, 500=TRACE)
+ *   string: canonical or convenience name */
+static sc_core::sc_verbosity cci_to_verbosity(int v) {
+    if (v < 100) {
+        if (v <= 0) return sc_core::SC_NONE;
+        if (v <= 3) return sc_core::SC_LOW;
+        if (v == 4) return sc_core::SC_MEDIUM;
+        if (v == 5) return sc_core::SC_HIGH;
+        return sc_core::SC_DEBUG;
+    }
+    return static_cast<sc_core::sc_verbosity>(v);
+}
+
+static sc_core::sc_verbosity cci_to_verbosity(const std::string& name) {
+    return static_cast<sc_core::sc_verbosity>(sc_core::as_log(name));
+}
+
+#ifdef HAS_CCI
+static sc_core::sc_log_level scp_cci_log_verbosity(
+    sc_core::sc_log_logger_cache& logger, const char* file, int line,
+    std::string_view local_tag);
+#endif
+
 static std::mutex cfg_guard;
+static std::thread::id sysc_thread_id;
+
 static void configure_logging() {
     std::lock_guard<std::mutex> lock(cfg_guard);
     static bool spdlog_initialized = false;
+    sysc_thread_id = std::this_thread::get_id();
 
     sc_core::sc_report_handler::set_actions(
         sc_core::SC_ERROR,
@@ -377,8 +402,18 @@ static void configure_logging() {
     sc_core::sc_report_handler::set_actions(sc_core::SC_FATAL,
                                             sc_core::SC_DEFAULT_FATAL_ACTIONS);
     sc_core::sc_report_handler::set_verbosity_level(
-        verbosity[static_cast<unsigned>(log_cfg.level)]);
+        static_cast<sc_core::sc_verbosity>(log_cfg.level));
     sc_core::sc_report_handler::set_handler(report_handler);
+#ifdef HAS_CCI
+    {
+        static bool verbosity_fn_set = false;
+        if (!verbosity_fn_set) {
+            sc_core::sc_log_impl::sc_set_log_verbosity_fn(
+                scp_cci_log_verbosity);
+            verbosity_fn_set = true;
+        }
+    }
+#endif
     if (!spdlog_initialized) {
         spdlog::init_thread_pool(
             1024U,
@@ -433,32 +468,62 @@ static void configure_logging() {
     }
 }
 
-void scp::reinit_logging(scp::log level) {
-    sc_core::sc_report_handler::set_handler(report_handler);
-    log_cfg.level = level;
-    lut.clear();
-}
+/* LogHandler — RAII owner of logging lifecycle */
 
-void scp::init_logging(scp::log level, unsigned type_field_width,
-                       bool print_time) {
-    log_cfg.msg_type_field_width = type_field_width;
-    log_cfg.print_sys_time = print_time;
-    log_cfg.level = level;
+scp::LogHandler::LogHandler(scp::LogConfig config) {
+    log_cfg = config;
     configure_logging();
 }
 
-void scp::init_logging(const scp::LogConfig& log_config) {
-    log_cfg = log_config;
-    configure_logging();
+scp::LogHandler::LogHandler(scp::log level, unsigned type_field_width,
+                            bool print_time):
+    LogHandler(LogConfig{}
+                   .logLevel(level)
+                   .msgTypeFieldWidth(type_field_width)
+                   .printSysTime(print_time)) {
+}
+
+scp::LogHandler::~LogHandler() {
+    if (log_cfg.console_logger) {
+        log_cfg.console_logger->flush();
+    }
+    if (log_cfg.file_logger) {
+        log_cfg.file_logger->flush();
+    }
+
+    log_cfg.console_logger.reset();
+    log_cfg.file_logger.reset();
+
+    spdlog::drop_all();
+    spdlog::shutdown();
 }
 
 void scp::set_logging_level(scp::log level) {
     log_cfg.level = level;
     sc_core::sc_report_handler::set_verbosity_level(
-        verbosity[static_cast<unsigned>(level)]);
-    log_cfg.console_logger->set_level(static_cast<spdlog::level::level_enum>(
-        SPDLOG_LEVEL_OFF -
-        std::min<int>(SPDLOG_LEVEL_OFF, static_cast<int>(log_cfg.level))));
+        static_cast<sc_core::sc_verbosity>(level));
+    spdlog::level::level_enum spdlvl;
+    switch (level) {
+    case scp::log::CRITICAL:
+        spdlvl = spdlog::level::critical;
+        break;
+    case scp::log::WARN:
+        spdlvl = spdlog::level::warn;
+        break;
+    case scp::log::INFO:
+        spdlvl = spdlog::level::info;
+        break;
+    case scp::log::DEBUG:
+        spdlvl = spdlog::level::debug;
+        break;
+    case scp::log::TRACE:
+        spdlvl = spdlog::level::trace;
+        break;
+    default:
+        spdlvl = spdlog::level::trace;
+        break;
+    }
+    log_cfg.console_logger->set_level(spdlvl);
 }
 
 auto scp::get_logging_level() -> scp::log {
@@ -469,26 +534,34 @@ void scp::set_cycle_base(sc_core::sc_time period) {
     log_cfg.cycle_base = period;
 }
 
-void scp::shutdown_logging() {
-    // Flush all loggers before shutdown
-    if (log_cfg.console_logger) {
-        log_cfg.console_logger->flush();
+void scp::set_display_name_style(scp::DisplayName style) {
+    log_cfg.display_name = style;
+}
+
+void scp::reset_logging() {
+    std::lock_guard<std::mutex> lock(logger_caches_mutex);
+    { std::unique_lock<std::shared_mutex> lk(tag_lut_mutex); tag_lut.clear(); }
+    auto range = logger_caches.equal_range("");
+    for (auto it = range.first; it != range.second; ++it) {
+        it->second->level = sc_core::sc_log_level::UNSET;
     }
-    if (log_cfg.file_logger) {
-        log_cfg.file_logger->flush();
+}
+
+void scp::set_log_level(const std::string& name, scp::log level) {
+    std::lock_guard<std::mutex> lock(logger_caches_mutex);
+    auto range = logger_caches.equal_range(name);
+    for (auto it = range.first; it != range.second; ++it) {
+        it->second->level = level;
     }
+}
 
-    // Clear our logger references before dropping them
-    // This prevents use-after-free if logging is attempted after shutdown
-    // (e.g., from static destructors)
-    log_cfg.console_logger.reset();
-    log_cfg.file_logger.reset();
-
-    // Drop all spdlog loggers to release resources
-    spdlog::drop_all();
-
-    // Shutdown the thread pool - this will join all worker threads
-    spdlog::shutdown();
+void scp::set_logger_tag(sc_core::sc_log_logger_cache& logger,
+                         const std::string& tag) {
+    logger.set_tag(tag);
+    {
+        std::lock_guard<std::mutex> lock(logger_caches_mutex);
+        logger_caches.emplace(tag, &logger);
+    }
 }
 
 auto scp::LogConfig::logLevel(scp::log level) -> scp::LogConfig& {
@@ -562,6 +635,21 @@ auto scp::LogConfig::fileInfoFrom(int v) -> scp::LogConfig& {
     return *this;
 }
 
+auto scp::LogConfig::displayNameStyle(scp::DisplayName v) -> scp::LogConfig& {
+    this->display_name = v;
+    return *this;
+}
+
+std::vector<std::string> scp::get_logging_parameters() {
+    return std::vector<std::string>(logging_parameters.begin(),
+                                    logging_parameters.end());
+}
+
+/* Shared helpers for CCI-based verbosity lookup */
+
+static const sc_core::sc_verbosity
+    SCP_VERBOSITY_UNSET = (sc_core::sc_verbosity)INT_MAX;
+
 std::vector<std::string> split(const std::string& s) {
     std::vector<std::string> result;
     std::istringstream iss(s);
@@ -582,45 +670,42 @@ std::string join(std::vector<std::string> vec) {
         });
 }
 
-std::vector<std::string> scp::get_logging_parameters() {
-    return std::vector<std::string>(logging_parameters.begin(),
-                                    logging_parameters.end());
-}
-
+#ifdef HAS_CCI
 sc_core::sc_verbosity cci_lookup(cci::cci_broker_handle broker,
                                  std::string name) {
     auto param_name = (name.empty()) ? SCP_LOG_LEVEL_PARAM_NAME
                                      : name + "." SCP_LOG_LEVEL_PARAM_NAME;
     auto h = broker.get_param_handle(param_name);
     if (h.is_valid()) {
-        return verbosity.at(std::min<unsigned>(h.get_cci_value().get_int(),
-                                               verbosity.size() - 1));
+        auto val = h.get_cci_value();
+        if (val.is_string())
+            return cci_to_verbosity(val.get_string());
+        return cci_to_verbosity(val.get_int());
     } else {
         auto val = broker.get_preset_cci_value(param_name);
 
+        if (val.is_string()) {
+            broker.lock_preset_value(param_name);
+            return cci_to_verbosity(val.get_string());
+        }
         if (val.is_int()) {
             broker.lock_preset_value(param_name);
-            return verbosity.at(
-                std::min<unsigned>(val.get_int(), verbosity.size() - 1));
+            return cci_to_verbosity(val.get_int());
         }
     }
-    return sc_core::SC_UNSET;
+    return SCP_VERBOSITY_UNSET;
 }
+#endif
 
 #ifdef __GNUG__
 std::string demangle(const char* name) {
-    int status = -4; // some arbitrary value to eliminate the compiler
-                     // warning
-
-    // enable c++11 by passing the flag -std=c++11 to g++
+    int status = -4;
     std::unique_ptr<char, void (*)(void*)> res{
         abi::__cxa_demangle(name, NULL, NULL, &status), std::free
     };
-
     return (status == 0) ? res.get() : name;
 }
 #else
-// does nothing if not GNUG
 std::string demangle(const char* name) {
     return name;
 }
@@ -636,80 +721,160 @@ void insert(std::multimap<int, std::string, std::greater<int>>& map,
     }
 }
 
-sc_core::sc_verbosity scp::scp_logger_cache::get_log_verbosity_cached(
-    const char* scname, const char* tname = "") {
-    if (level != sc_core::SC_UNSET) {
-        return level;
+#ifdef HAS_CCI
+/* CCI-based verbosity callback for SC_LOG.
+ * Replicates old SCP's feature-priority CCI lookup using the logger's
+ * tag (comma-separated features), scname, and typename. */
+static sc_core::sc_log_level scp_cci_log_verbosity(
+    sc_core::sc_log_logger_cache& logger, const char* file, int line,
+    std::string_view local_tag) {
+    /* Fast path: per-tag LUT for string-tag lookups */
+    if (!local_tag.empty()) {
+        std::shared_lock<std::shared_mutex> lk(tag_lut_mutex);
+        auto it = tag_lut.find(std::string(local_tag));
+        if (it != tag_lut.end())
+            return it->second;
     }
 
-    if (!scname && features.size())
-        scname = features[0].c_str();
-    if (!scname)
-        scname = "";
+    /* Register this cache under all its identifiers for reset_logging/
+     * set_log_level_by_name lookups. Protected by mutex since the callback
+     * may be invoked from non-SystemC threads. */
+    {
+        std::lock_guard<std::mutex> lock(logger_caches_mutex);
+        if (!logger.scname.empty())
+            logger_caches.emplace(std::string(logger.scname), &logger);
+        if (!logger.tag.empty()) {
+            std::string tag_str(logger.tag);
+            std::istringstream iss(tag_str);
+            std::string item;
+            while (std::getline(iss, item, SCP_TAG_SEP)) {
+                if (!item.empty())
+                    logger_caches.emplace(item, &logger);
+            }
+        }
+        logger_caches.emplace("", &logger);
+    }
 
-    type = std::string(scname);
+    std::string scname_str;
+    std::vector<std::string> features;
 
-#ifdef HAS_CCI
+    if (!logger.tag.empty()) {
+        /* Split compound tag on SCP_TAG_SEP to recover individual features */
+        std::string tag_str(logger.tag);
+        std::istringstream iss(tag_str);
+        std::string item;
+        while (std::getline(iss, item, SCP_TAG_SEP)) {
+            if (!item.empty())
+                features.push_back(item);
+        }
+    }
+
+    if (!logger.scname.empty()) {
+        scname_str = std::string(logger.scname);
+    } else if (!local_tag.empty()) {
+        scname_str = std::string(local_tag);
+    } else if (!features.empty()) {
+        scname_str = features[0];
+    }
+
+    std::string tname_str;
+    if (logger.typename_str) {
+        tname_str = demangle(logger.typename_str);
+    }
+
+    std::string fname_str;
+    if (file) {
+        fname_str = file;
+        auto slash = fname_str.find_last_of("/\\");
+        if (slash != std::string::npos)
+            fname_str = fname_str.substr(slash + 1);
+    }
+
+    /* For completely anonymous loggers, fall back to global verbosity.
+     * filename alone doesn't make a logger non-anonymous — it's just
+     * additional context when a scname/tag/typename is present. */
+    if (scname_str.empty() && features.empty() && tname_str.empty()) {
+        return static_cast<sc_core::sc_log_level>(
+            ::sc_core::sc_report_handler::get_verbosity_level());
+    }
+
+    /* Only access CCI broker from the SystemC thread.
+     * Other threads (e.g. QEMU) get the global default without caching,
+     * so the next call from the SystemC thread will resolve correctly. */
+    if (std::this_thread::get_id() != sysc_thread_id) {
+        return static_cast<sc_core::sc_log_level>(
+            ::sc_core::sc_report_handler::get_verbosity_level());
+    }
+
     try {
-        // we rely on there being a broker, allow this to throw if not
         auto broker = sc_core::sc_get_current_object()
                           ? cci::cci_get_broker()
                           : cci::cci_get_global_broker(scp_global_originator);
 
         std::multimap<int, std::string, std::greater<int>> allfeatures;
 
-        /* initialize */
-        for (auto scn = split(scname); scn.size(); scn.pop_back()) {
-            for (int first = 0; first < scn.size(); first++) {
+        for (auto scn = split(scname_str); scn.size(); scn.pop_back()) {
+            for (size_t first = 0; first < scn.size(); first++) {
                 auto f = scn.begin() + first;
                 std::vector<std::string> p(f, scn.end());
                 auto scn_str = ((first > 0) ? "*." : "") + join(p);
 
-                for (auto ft : features) {
+                for (auto& ft : features) {
                     for (auto ftn = split(ft); ftn.size(); ftn.pop_back()) {
                         insert(allfeatures, scn_str + "." + join(ftn),
                                first == 0);
                     }
                 }
-                insert(allfeatures, scn_str + "." + demangle(tname),
-                       first == 0);
+                if (!tname_str.empty())
+                    insert(allfeatures, scn_str + "." + tname_str, first == 0);
+                if (!fname_str.empty())
+                    insert(allfeatures, scn_str + "." + fname_str, first == 0);
                 insert(allfeatures, scn_str, first == 0);
             }
         }
-        for (auto ft : features) {
+        for (auto& ft : features) {
             for (auto ftn = split(ft); ftn.size(); ftn.pop_back()) {
                 insert(allfeatures, join(ftn), true);
                 insert(allfeatures, "*." + join(ftn), false);
             }
         }
-        insert(allfeatures, demangle(tname), true);
+        if (!tname_str.empty())
+            insert(allfeatures, tname_str, true);
+        if (!fname_str.empty())
+            insert(allfeatures, fname_str, true);
         insert(allfeatures, "*", false);
         insert(allfeatures, "", false);
 
-        for (std::pair<int, std::string> f : allfeatures) {
-            sc_core::sc_verbosity v = cci_lookup(broker, f.second);
-            if (v != sc_core::SC_UNSET) {
-                level = v;
-                return v;
+        for (auto& [priority, name] : allfeatures) {
+            sc_core::sc_verbosity v = cci_lookup(broker, name);
+            if (v != SCP_VERBOSITY_UNSET) {
+                auto lvl = static_cast<sc_core::sc_log_level>(v);
+                if (local_tag.empty() && &logger != &SC_LOG_LOG_LEVEL_CACHE_GLOBAL)
+                    logger.level = lvl;
+                else if (!local_tag.empty()) {
+                    std::unique_lock<std::shared_mutex> lk(tag_lut_mutex);
+                    tag_lut[std::string(local_tag)] = lvl;
+                }
+                return lvl;
             }
         }
     } catch (const std::exception&) {
         // If there is no global broker, revert to initialized verbosity level
     }
 
-#endif
-
-    return level = static_cast<sc_core::sc_verbosity>(
-               ::sc_core::sc_report_handler::get_verbosity_level());
+    auto lvl = static_cast<sc_core::sc_log_level>(
+        ::sc_core::sc_report_handler::get_verbosity_level());
+    if (local_tag.empty() && &logger != &SC_LOG_LOG_LEVEL_CACHE_GLOBAL)
+        logger.level = lvl;
+    else if (!local_tag.empty()) {
+        std::unique_lock<std::shared_mutex> lk(tag_lut_mutex);
+        tag_lut[std::string(local_tag)] = lvl;
+    }
+    return lvl;
 }
+#endif // HAS_CCI
 
 auto scp::get_log_verbosity(char const* str) -> sc_core::sc_verbosity {
-    auto k = char_hash(str);
-    auto it = lut.find(k);
-    if (it != lut.end())
-        return it->second;
-
-    scp::scp_logger_cache tmp;
-    lut[k] = tmp.get_log_verbosity_cached(str);
-    return lut[k];
+    return static_cast<sc_core::sc_verbosity>(
+        ::sc_core::sc_report_handler::get_verbosity_level());
 }

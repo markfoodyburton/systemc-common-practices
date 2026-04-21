@@ -13,10 +13,16 @@
   permissions and limitations under the License.
  ****************************************************************************/
 
+/*
+ * smoke_report_sc_log.cc — identical to smoke_report.cc but uses
+ * SystemC 4.0 native SC_LOG macros (SC_INFO, SC_WARN, SC_LOG_HANDLE, etc.)
+ * instead of SCP macros.  Must compile and run on both SystemC 3.0
+ * (via the adaptation layer) and SystemC 4.0.
+ */
+
 #include <scp/tlm_extensions/initiator_id.h>
 #include <scp/tlm_extensions/path_trace.h>
 #include <scp/cci_report_backend.h>
-#include <scp/scp_log.h>
 
 #include <systemc>
 #include <tlm>
@@ -30,82 +36,83 @@
 
 SC_MODULE (test4) {
     SC_CTOR (test4) {
-        SCP_INFO(()) << " .   T4 Logger() 1";
-        SCP_WARN(()) << " .   T4 Logger() 1";
-        SCP_INFO(()) << " .   T4 Logger() 2";
-        SCP_WARN(()) << " .   T4 Logger() 2";
+        SC_INFO() << " .   T4 Logger() 1";
+        SC_WARN() << " .   T4 Logger() 1";
+        SC_INFO() << " .   T4 Logger() 2";
+        SC_WARN() << " .   T4 Logger() 2";
     }
-    SCP_LOGGER();
+    SC_LOG_HANDLE();
 };
 
 SC_MODULE (test3) {
     SC_CTOR (test3) {
-        SCP_INFO((D)) << " .  T3 D Logger \"other\" \"feature.one\"";
-        SCP_WARN((D)) << " .  T3 D Logger \"other\" \"feature.one\"";
-        SCP_INFO(()) << " .  T3 Logger ()";
-        SCP_WARN(()) << " .  T3 Logger ()";
+        SC_INFO(D) << " .  T3 D Logger \"other\" \"feature.one\"";
+        SC_WARN(D) << " .  T3 D Logger \"other\" \"feature.one\"";
+        SC_INFO() << " .  T3 Logger ()";
+        SC_WARN() << " .  T3 Logger ()";
     }
-    SCP_LOGGER((D), "other", "feature.one");
-    SCP_LOGGER(());
+    SC_LOG_HANDLE(D, "other");
+    SC_LOG_HANDLE();
 };
 
 SC_MODULE (test2) {
     SC_CTOR (test2) : t31("t3_1"), t32("t3_2"), t4("t4") {
-            SCP_INFO(()) << "  T2 Logger()";
-            SCP_WARN(()) << "  T2 Logger()";
+            SC_INFO() << "  T2 Logger()";
+            SC_WARN() << "  T2 Logger()";
         }
-    SCP_LOGGER();
+    SC_LOG_HANDLE();
     test3 t31, t32;
     test4 t4;
 };
 
 SC_MODULE (test1) {
     SC_CTOR (test1) : t2("t2") {
-            SCP_WARN((), "My.Name") << " T1 My.Name typed log";
-            SCP_INFO(()) << " T1 Logger()";
-            SCP_WARN(()) << " T1 Logger()";
+            SC_WARN(my_name_logger) << " T1 My.Name typed log";
+            SC_INFO() << " T1 Logger()";
+            SC_WARN() << " T1 Logger()";
 
-            SCP_LOGGER_VECTOR_PUSH_BACK(vec, "some", "thing1");
-            SCP_LOGGER_VECTOR_PUSH_BACK(vec, "some", "thing2");
+            SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "thing1");
+            SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "thing2");
 
-            SCP_INFO((vec[0])) << "Thing1?";
-            SCP_WARN((vec[0])) << "Thing1?";
-            SCP_INFO((vec[1])) << "Thing2?";
-            SCP_WARN((vec[1])) << "Thing2?";
+            SC_INFO(vec[0]) << "Thing1?";
+            SC_WARN(vec[0]) << "Thing1?";
+            SC_INFO(vec[1]) << "Thing2?";
+            SC_WARN(vec[1]) << "Thing2?";
         }
-    SCP_LOGGER("something", "else");
-    SCP_LOGGER_VECTOR(vec);
+    SC_LOG_HANDLE("something");
+    SC_LOG_HANDLE(my_name_logger, "My.Name");
+    SC_LOG_HANDLE_VECTOR(vec);
     test2 t2;
 };
 
+SC_LOG_HANDLE_STATIC(out_class_logger, "out.class");
+
 class outside_class
 {
-    SCP_LOGGER("out.class", "thing1");
-
 public:
     outside_class() {
-        SCP_INFO(())("constructor");
-        SCP_WARN(())("constructor");
+        SC_INFO(out_class_logger)("constructor");
+        SC_WARN(out_class_logger)("constructor");
     }
 };
 
 SC_MODULE (test) {
     outside_class oc;
     SC_CTOR (test) {
-        SCP_DEBUG(SCMOD) << "First part";
+        SC_DEBUG() << "First part";
         scp::tlm_extensions::path_trace ext;
         ext.stamp(this);
-        SCP_INFO(SCMOD) << ext.to_string();
+        SC_INFO() << ext.to_string();
         ext.reset();
 
         ext.stamp(this);
         ext.stamp(this);
         ext.stamp(this);
 
-        SCP_INFO(SCMOD) << ext.to_string();
+        SC_INFO() << ext.to_string();
         ext.reset();
 
-        SCP_DEBUG(SCMOD) << "Second part";
+        SC_DEBUG() << "Second part";
         scp::tlm_extensions::initiator_id mid(0x1234);
         mid = 0x2345;
         mid &= 0xff;
@@ -118,17 +125,16 @@ SC_MODULE (test) {
             SC_REPORT_INFO("ext test", "Failour");
         }
 
-        SCP_INFO() << "Uncached version empty";
-        SCP_INFO(())("FMT String : Cached version default");
-        SCP_INFO(SCMOD) << "UnCached version feature using SCMOD macro";
-        SCP_INFO((m_my_logger)) << "Cached version using (m_my_logger)";
-        SCP_INFO((D)) << "Cached version with D";
+        SC_REPORT_INFO("SystemC", "Uncached version empty");
+        SC_INFO()("FMT String : Cached version default");
+        SC_INFO() << "UnCached version feature using SCMOD macro";
+        SC_INFO(m_my_logger) << "Cached version using (m_my_logger)";
+        SC_INFO(D) << "Cached version with D";
     }
 
-    SCP_LOGGER((m_my_logger));
-    SCP_LOGGER(());
-    SCP_LOGGER((1), "other");
-    SCP_LOGGER((D), "other", "feature.one");
+    SC_LOG_HANDLE(m_my_logger, "my_logger");
+    SC_LOG_HANDLE();
+    SC_LOG_HANDLE(D, "other");
 };
 
 int sc_main(int argc, char** argv) {
@@ -140,9 +146,11 @@ int sc_main(int argc, char** argv) {
     broker.set_preset_cci_value("*.t3_1.log_level", cci::cci_value(5), orig);
     broker.set_preset_cci_value("feature.log_level", cci::cci_value(5), orig);
 
+    broker.set_preset_cci_value("out.class.log_level", cci::cci_value(5), orig);
+    broker.set_preset_cci_value("other.log_level", cci::cci_value(5), orig);
     broker.set_preset_cci_value("test4.log_level", cci::cci_value(4), orig);
     broker.set_preset_cci_value("thing1.log_level", cci::cci_value(5), orig);
-    std::string logfile = "/tmp/scp_smoke_report_test." +
+    std::string logfile = "/tmp/scp_smoke_report_sc_log_test." +
                           std::to_string(getpid());
     scp::LogHandler logging_handler(
         scp::LogConfig()
@@ -153,39 +161,30 @@ int sc_main(int argc, char** argv) {
             .printSimTime(false)
             .displayNameStyle(scp::DisplayName::SCNAME)
             .logFileName(logfile)); // make the msg type column a bit tighter
-    SCP_INFO() << "Constructing design";
+    SC_INFO() << "Constructing design";
     test toptest("top");
     test1 t1("t1");
 
-    SCP_INFO() << "Starting simulation";
+    SC_INFO() << "Starting simulation";
     sc_core::sc_start();
-    SCP_WARN() << "Ending simulation";
+    SC_WARN() << "Ending simulation";
 
 #ifdef FMT_SHARED
     std::string fmtstr = "FMT String : Cached version default";
 #else
-    std::string fmtstr = "Please add FMT library for FMT support.";
-#endif
-
-    /* On SystemC 4, SCP_INFO() inside a module uses the module's default
-     * handle (scname = module name).  On SystemC 3, it uses the global
-     * handle (displays "SystemC"). */
-#if __has_include(<sysc/log/sc_log.h>)
-    std::string uncached_tag = "top                 ";
-#else
-    std::string uncached_tag = "SystemC             ";
+    std::string fmtstr = "";
 #endif
 
     std::string expected =
         R"([    info] [                0 s ]SystemC             : Constructing design
-[    info] [                0 s ]out.class,thing1    : constructor
-[ warning] [                0 s ]out.class,thing1    : constructor
+[    info] [                0 s ]out.class           : constructor
+[ warning] [                0 s ]out.class           : constructor
 [   debug] [                0 s ]top                 : First part
 [    info] [                0 s ]top                 : top
 [    info] [                0 s ]top                 : top->top->top
 [   debug] [                0 s ]top                 : Second part
 [    info] [                0 s ]ext test            : Success
-[    info] [                0 s ])" + uncached_tag + R"(: Uncached version empty
+[    info] [                0 s ]SystemC             : Uncached version empty
 [    info] [                0 s ]top                 : )" +
         fmtstr + R"(
 [    info] [                0 s ]top                 : UnCached version feature using SCMOD macro
