@@ -16,6 +16,9 @@ SCP macro compatibility for SystemC projects. It supports both SystemC 3
 On SystemC 4, `<systemc>` already provides SC_LOG natively. `<scp/sc_log.h>` is
 only needed for portability across SystemC 3 and 4.
 
+> Porting an existing SCP-based project to native SC_LOG? See
+> [`MIGRATION.md`](MIGRATION.md) for a short step-by-step checklist.
+
 ### Include patterns
 
 | Use case | Modules include | Top level includes |
@@ -28,25 +31,41 @@ only needed for portability across SystemC 3 and 4.
 
 ## Log Levels
 
-| SC_LOG level | SCP macro | sc_core equivalent |
-| ------------ | --------- | ------------------ |
-| CRITICAL | `SCP_FATAL` / `SCP_ERR` | `SC_NONE` |
-| WARN | `SCP_WARN` | `SC_LOW` |
-| INFO | `SCP_INFO` | `SC_MEDIUM` |
-| DEBUG | `SCP_DEBUG` | `SC_HIGH` |
-| TRACE | `SCP_TRACE` / `SCP_TRACEALL` | `SC_DEBUG` / `SC_FULL` |
+Logging levels are expressed directly as `sc_core::sc_verbosity` values on a
+clean 100-step scale.  The convenience macros and the SCP-prefixed macros map
+as follows:
 
-**Important differences from the old SCP macros:**
+| Level | Label | SC_LOG macro | SCP macro | `sc_core::sc_verbosity` |
+| ----- | ----- | ------------ | --------- | ----------------------- |
+| CRITICAL | `C` | `SC_CRITICAL` | `SCP_FATAL` / `SCP_ERR` / `SCP_CRITICAL` | `SC_LOW` (100) |
+| ALERT    | `A` | `SC_ALERT`    | `SCP_WARN`  | `SC_MEDIUM` (200) |
+| NOTE     | `N` | `SC_NOTE`     | `SCP_INFO`  | `SC_HIGH` (300) |
+| DETAIL   | `D` | `SC_DETAIL`   | `SCP_DEBUG` | `SC_FULL` (400) |
+| INTERNAL | `I` | `SC_INTERNAL` | `SCP_TRACE` / `SCP_TRACEALL` | `SC_DEBUG` (500) |
 
-- `SCP_FATAL` and `SCP_ERR` now map to `SC_CRITICAL`. They are
+`SC_NONE` (0) is "off" — nothing is emitted at verbosity 0.
+
+**Notes / differences from the older SCP scheme:**
+
+- The convenience-macro family was renamed away from SystemC's reserved
+  vocabulary (`SC_INFO`/`SC_DEBUG` collided with `sc_severity`/`sc_verbosity`
+  enumerators; `SC_TRACE` was confusable with `sc_trace()`).  The separate
+  `sc_log_level` enum was removed — levels *are* `sc_verbosity` values now.
+
+- The **SCP-prefixed macro names are unchanged** (`SCP_INFO`, `SCP_DEBUG`,
+  `SCP_TRACE`, ...), so existing call sites keep compiling.  Only the level
+  *name* shown in the output changes (e.g. an `SCP_INFO` line now prints with
+  the `[N]` / `NOTE` label).
+
+- `SCP_FATAL`, `SCP_ERR`, and `SCP_CRITICAL` map to `SC_CRITICAL`.  They are
   **non-intrusive** — they do NOT call `abort()`, `throw`, or `sc_stop()`.
   This matches the SC_LOG standard which states that logging "shall not
   throw an exception or abort the program." If you need fatal/error behavior
   with side effects, use `SC_REPORT_FATAL` / `SC_REPORT_ERROR` directly.
 
-- `SCP_FATAL`, `SCP_ERR`, and `SCP_WARN` all map to levels that will be
-  printed when the CCI `log_level` is set to 1 or above (they all resolve
-  to `SC_LOW` verbosity or lower in the CCI mapping).
+- `CRITICAL` now sits at verbosity 100 (not 0): at the default verbosity of 0
+  nothing prints; raise the verbosity to `SC_LOW` (100) or above to see
+  `CRITICAL` messages.
 
 ## SC_LOG Macros (Native API)
 
@@ -56,14 +75,14 @@ On **SystemC 4**, every `sc_module` automatically has a default logging handle
 (provided by `sc_module` itself). No explicit declaration is needed.
 
 On **SystemC 3** (with the adaptation layer), `sc_module` does NOT provide a
-default handle. Modules that use `SC_INFO()`, `SC_WARN()`, etc. must
+default handle. Modules that use `SC_NOTE()`, `SC_ALERT()`, etc. must
 declare one explicitly:
 
 ```cpp
 SC_MODULE(my_module) {
     SC_LOG_HANDLE();  // Required on SystemC 3
     SC_CTOR(my_module) {
-        SC_INFO() << "hello";
+        SC_NOTE() << "hello";
     }
 };
 ```
@@ -88,15 +107,15 @@ SC_LOG_HANDLE(name, "feat_a,feat_b") // Named handle with multiple features
 ### Logging macros
 
 ```cpp
-SC_INFO() << "message";              // Default handle
-SC_INFO(handle) << "message";        // Named handle
-SC_INFO("tag") << "message";         // String tag
-SC_WARN(handle, "tag") << "message"; // Handle with override tag
+SC_NOTE() << "message";              // Default handle
+SC_NOTE(handle) << "message";        // Named handle
+SC_NOTE("tag") << "message";         // String tag
+SC_ALERT(handle, "tag") << "message"; // Handle with override tag
 ```
 
 Format strings are supported if `<format>` or fmt is available:
 ```cpp
-SC_INFO()("The answer is {}.", 42);
+SC_NOTE()("The answer is {}.", 42);
 ```
 
 ## SCP Macros (Deprecated — Legacy Compatibility)
@@ -122,12 +141,12 @@ SCP_INFO(SCMOD) << "module name";    // String tag (uses global logger)
 
 | SCP form | SC_LOG equivalent |
 | -------- | ----------------- |
-| `SCP_INFO(())` | `SC_INFO(_scp_log_cache_)` |
-| `SCP_INFO((D))` | `SC_INFO(_scp_log_cache_D)` |
-| `SCP_INFO((), "tag")` | `SC_INFO(_scp_log_cache_, "tag")` |
-| `SCP_INFO((D), "tag")` | `SC_INFO(_scp_log_cache_D, "tag")` |
-| `SCP_INFO(SCMOD)` | `SC_INFO(this->sc_core::sc_module::name())` |
-| `SCP_INFO()` | `SC_INFO()` |
+| `SCP_INFO(())` | `SC_NOTE(_scp_log_cache_)` |
+| `SCP_INFO((D))` | `SC_NOTE(_scp_log_cache_D)` |
+| `SCP_INFO((), "tag")` | `SC_NOTE(_scp_log_cache_, "tag")` |
+| `SCP_INFO((D), "tag")` | `SC_NOTE(_scp_log_cache_D, "tag")` |
+| `SCP_INFO(SCMOD)` | `SC_NOTE(this->sc_core::sc_module::name())` |
+| `SCP_INFO()` | `SC_NOTE()` |
 
 Note: `SCP_INFO(SCMOD)` expands to the string-tag form which uses the
 global logger, not the module's cached handle. See **String-Tag Form**
@@ -152,27 +171,27 @@ deprecated and will be removed in a future release.
 
 | SCP form | SC_LOG equivalent |
 | -------- | ----------------- |
-| `SCP_INFO(())` | `SC_INFO()` |
-| `SCP_INFO((D))` | `SC_INFO(D)` |
-| `SCP_INFO((v[0]))` | `SC_INFO(v[0])` |
+| `SCP_INFO(())` | `SC_NOTE()` |
+| `SCP_INFO((D))` | `SC_NOTE(D)` |
+| `SCP_INFO((v[0]))` | `SC_NOTE(v[0])` |
 
 ### Special cases
 
-**`SCP_INFO(SCMOD)`** expands to `SC_INFO(this->sc_core::sc_module::name())`
+**`SCP_INFO(SCMOD)`** expands to `SC_NOTE(this->sc_core::sc_module::name())`
 — the string-tag form. This uses the **global** logger, not the module's
 handle. It works correctly but is slower (no caching per module). To
-migrate: replace with `SC_INFO()` (which uses the module's default handle)
+migrate: replace with `SC_NOTE()` (which uses the module's default handle)
 and ensure `SC_LOG_HANDLE()` is declared in the module.
 
-**`SCP_INFO((), "tag")`** expands to `SC_INFO(_scp_log_cache_, "tag")`
+**`SCP_INFO((), "tag")`** expands to `SC_NOTE(_scp_log_cache_, "tag")`
 — the handle + tag override form. The SC_LOG equivalent is
-`SC_INFO(handle, "tag")` where `handle` is a named `SC_LOG_HANDLE`.
+`SC_NOTE(handle, "tag")` where `handle` is a named `SC_LOG_HANDLE`.
 There is no direct equivalent using the default handle without knowing
 its variable name. If a tag override is needed, declare a named handle:
 
 ```cpp
 SC_LOG_HANDLE(my_h, "");           // or SC_LOG_HANDLE(my_h, "tag")
-SC_INFO(my_h, "override") << ...;  // handle + tag override
+SC_NOTE(my_h, "override") << ...;  // handle + tag override
 ```
 
 ## Multi-Feature Tags
@@ -204,25 +223,25 @@ The `log_level` CCI parameter accepts three forms:
 
 | Form | Example | Resolves to |
 | ---- | ------- | ----------- |
-| Small int (0–99) | `log_level=5` | 0=NONE, 1–3=WARN, 4=INFO, 5=DEBUG, 6+=TRACE |
-| Large int (≥100) | `log_level=500` | Direct `sc_verbosity` value (100=WARN, 200=INFO, 400=DEBUG, 500=TRACE) |
-| String | `log_level="DEBUG"` | Canonical names: NONE, CRITICAL, WARN, INFO, DEBUG, TRACE. Also accepts WARNING, FATAL, ERROR, TRACEALL, DBGTRACE. |
+| Small int (0–99) | `log_level=5` | 0=off, 1–3=CRITICAL, 4=ALERT, 5=NOTE, 6+=INTERNAL |
+| Large int (≥100) | `log_level=400` | Direct `sc_verbosity` value (100=CRITICAL, 200=ALERT, 300=NOTE, 400=DETAIL, 500=INTERNAL) |
+| String | `log_level="DETAIL"` | Canonical names: NONE, CRITICAL, ALERT, NOTE, DETAIL, INTERNAL. Also accepts the legacy names WARN, WARNING, INFO, DEBUG, TRACE, TRACEALL, DBGTRACE, FATAL, ERROR. |
 
-All three forms are equivalent: `log_level=5`, `log_level=400`, and
-`log_level="DEBUG"` all resolve to DEBUG level.
+For example `log_level=400` and `log_level="DETAIL"` both resolve to the
+DETAIL level (the legacy `log_level="DEBUG"` also resolves to DETAIL).
 
 ## String-Tag Form
 
-`SC_INFO("tag")` (1-arg string form) uses the **global** default logger,
+`SC_NOTE("tag")` (1-arg string form) uses the **global** default logger,
 not the module's local handle. The verbosity is looked up via CCI using
 `"tag"` as the scope name. Each distinct tag is cached in a per-tag
 lookup table (thread-safe, `shared_mutex`-protected), so repeated calls
 with the same tag are efficient. Different string tags do not interfere
 with each other's cached levels.
 
-Note: `SC_INFO("tag")` does NOT use the module's logger. For module-aware
+Note: `SC_NOTE("tag")` does NOT use the module's logger. For module-aware
 logging with a tag override, use the 2-arg form:
-`SC_INFO(handle, "tag")`.
+`SC_NOTE(handle, "tag")`.
 
 ## Feature Matching Rules
 
@@ -296,7 +315,7 @@ flushes all pending messages and shuts down spdlog.
 
 | Option | Method | Default |
 | ------ | ------ | ------- |
-| Log level | `logLevel(scp::log)` | `WARN` |
+| Log level | `logLevel(sc_core::sc_verbosity)` | `ALERT` (`scp::log::WARN`) |
 | Message type field width | `msgTypeFieldWidth(unsigned)` | 24 |
 | Print system time | `printSysTime(bool)` | false |
 | Print simulation time | `printSimTime(bool)` | true |
@@ -367,7 +386,7 @@ SC_MODULE(my_device) {
     SC_CTOR(my_device)
         : m_reg_name(std::string(name()) + ".control_reg")
     {
-        SC_INFO(reg_h) << "register initialized";
+        SC_NOTE(reg_h) << "register initialized";
     }
 };
 
@@ -393,7 +412,7 @@ For dynamic per-client logging (e.g. TLM multi-ports):
 SC_LOG_HANDLE_VECTOR(vec);
 SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "client0");
 SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "client1");
-SC_INFO(vec[0]) << "from client 0";
+SC_NOTE(vec[0]) << "from client 0";
 
 // SCP style:
 SCP_LOGGER_VECTOR(vec);

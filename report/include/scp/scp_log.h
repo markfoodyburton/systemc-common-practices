@@ -178,19 +178,24 @@ inline const char* _scp_join_tags(Args&&... args) {
     _SCP_IIF(_SCP_HAS_ARGS(_SCP_PAREN_INNER(_SCP_FIRST_ARG(__VA_ARGS__))))( \
         _SCP_DP_NAMED(M, __VA_ARGS__), _SCP_DP_DEFAULT(M, __VA_ARGS__))
 
-/* SCP_INFO(SCMOD)      -> SC_INFO(SCMOD)
- * SCP_INFO()           -> SC_INFO() */
+/* SCP_INFO(SCMOD)      -> SC_NOTE(SCMOD)
+ * SCP_INFO()           -> SC_NOTE() */
 #define _SCP_DISPATCH(M, ...)                                 \
     _SCP_IIF(_SCP_HAS_ARGS(__VA_ARGS__))(                     \
         _SCP_IIF(_SCP_IS_PAREN(_SCP_FIRST_ARG(__VA_ARGS__)))( \
             _SCP_DP_PAREN(M, __VA_ARGS__), M(__VA_ARGS__)),   \
         M())
 
-#define SCP_TRACEALL(...) _SCP_DISPATCH(SC_TRACE, __VA_ARGS__)
-#define SCP_TRACE(...)    _SCP_DISPATCH(SC_TRACE, __VA_ARGS__)
-#define SCP_DEBUG(...)    _SCP_DISPATCH(SC_DEBUG, __VA_ARGS__)
-#define SCP_INFO(...)     _SCP_DISPATCH(SC_INFO, __VA_ARGS__)
-#define SCP_WARN(...)     _SCP_DISPATCH(SC_WARN, __VA_ARGS__)
+/* The SCP_* names are unchanged for source compatibility; their expansion is
+ * retargeted onto the renamed SC_LOG convenience macros:
+ *   SCP_TRACE/TRACEALL -> SC_INTERNAL   SCP_DEBUG -> SC_DETAIL
+ *   SCP_INFO -> SC_NOTE                 SCP_WARN  -> SC_ALERT
+ *   SCP_CRITICAL/ERR/FATAL -> SC_CRITICAL */
+#define SCP_TRACEALL(...) _SCP_DISPATCH(SC_INTERNAL, __VA_ARGS__)
+#define SCP_TRACE(...)    _SCP_DISPATCH(SC_INTERNAL, __VA_ARGS__)
+#define SCP_DEBUG(...)    _SCP_DISPATCH(SC_DETAIL, __VA_ARGS__)
+#define SCP_INFO(...)     _SCP_DISPATCH(SC_NOTE, __VA_ARGS__)
+#define SCP_WARN(...)     _SCP_DISPATCH(SC_ALERT, __VA_ARGS__)
 #define SCP_CRITICAL(...) _SCP_DISPATCH(SC_CRITICAL, __VA_ARGS__)
 #define SCP_ERR(...)      _SCP_DISPATCH(SC_CRITICAL, __VA_ARGS__)
 #define SCP_FATAL(...)    _SCP_DISPATCH(SC_CRITICAL, __VA_ARGS__)

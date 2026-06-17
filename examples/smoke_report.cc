@@ -177,39 +177,30 @@ int sc_main(int argc, char** argv) {
 #endif
 
     std::string expected =
-        R"([    info] [                0 s ]SystemC             : Constructing design
-[    info] [                0 s ]out.class,thing1    : constructor
-[ warning] [                0 s ]out.class,thing1    : constructor
-[   debug] [                0 s ]top                 : First part
-[    info] [                0 s ]top                 : top
-[    info] [                0 s ]top                 : top->top->top
-[   debug] [                0 s ]top                 : Second part
-[    info] [                0 s ]ext test            : Success
-[    info] [                0 s ])" + uncached_tag + R"(: Uncached version empty
-[    info] [                0 s ]top                 : )" +
+        R"([NOTE] [                0 s ]SystemC             : Constructing design
+[NOTE] [                0 s ]out.class,thing1    : constructor
+[ALERT] [                0 s ]out.class,thing1    : constructor
+[NOTE] [                0 s ]top                 : top
+[NOTE] [                0 s ]top                 : top->top->top
+[ALERT] [                0 s ]ext test            : Success
+[NOTE] [                0 s ])" + uncached_tag + R"(: Uncached version empty
+[NOTE] [                0 s ]top                 : )" +
         fmtstr + R"(
-[    info] [                0 s ]top                 : UnCached version feature using SCMOD macro
-[    info] [                0 s ]top                 : Cached version using (m_my_logger)
-[    info] [                0 s ]top                 : Cached version with D
-[    info] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
-[ warning] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
-[    info] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
-[ warning] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
-[    info] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
-[ warning] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
-[ warning] [                0 s ]t1.t2.t3_2          :  .  T3 Logger ()
-[    info] [                0 s ]t1.t2.t4            :  .   T4 Logger() 1
-[ warning] [                0 s ]t1.t2.t4            :  .   T4 Logger() 1
-[    info] [                0 s ]t1.t2.t4            :  .   T4 Logger() 2
-[ warning] [                0 s ]t1.t2.t4            :  .   T4 Logger() 2
-[ warning] [                0 s ]t1.t2               :   T2 Logger()
-[ warning] [                0 s ]t1                  :  T1 My.Name typed log
-[ warning] [                0 s ]t1                  :  T1 Logger()
-[    info] [                0 s ]t1                  : Thing1?
-[ warning] [                0 s ]t1                  : Thing1?
-[ warning] [                0 s ]t1                  : Thing2?
-[    info] [                0 s ]SystemC             : Starting simulation
-[ warning] [                0 s ]SystemC             : Ending simulation
+[NOTE] [                0 s ]top                 : UnCached version feature using SCMOD macro
+[NOTE] [                0 s ]top                 : Cached version using (m_my_logger)
+[NOTE] [                0 s ]top                 : Cached version with D
+[NOTE] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
+[ALERT] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
+[NOTE] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
+[ALERT] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
+[NOTE] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
+[ALERT] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
+[ALERT] [                0 s ]t1.t2.t4            :  .   T4 Logger() 1
+[ALERT] [                0 s ]t1.t2.t4            :  .   T4 Logger() 2
+[NOTE] [                0 s ]t1                  : Thing1?
+[ALERT] [                0 s ]t1                  : Thing1?
+[NOTE] [                0 s ]SystemC             : Starting simulation
+[ALERT] [                0 s ]SystemC             : Ending simulation
 )";
 
     std::ifstream lf(logfile);

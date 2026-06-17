@@ -58,64 +58,28 @@
 
 namespace sc_core {
 
-// Windows defines ERROR as a macro; undef to allow it as an enum value.
+// Windows defines ERROR as a macro; undef to allow it as a level name.
 #undef ERROR
 
-enum class sc_log_level {
-    NONE = sc_core::SC_NONE,
-    CRITICAL = sc_core::SC_NONE,
-    WARN = sc_core::SC_LOW,
-    INFO = sc_core::SC_MEDIUM,
-    DEBUG = sc_core::SC_HIGH,
-    TRACE = sc_core::SC_DEBUG,
+/* Initial logger-cache level meaning "not yet resolved" (replaced once the
+ * verbosity is computed).  Internal implementation marker, not part of
+ * IEEE 1666.  This definition is only compiled on older SystemC; on
+ * SystemC 4.0 SC_UNSET comes from the native sc_log header. */
+inline constexpr int SC_UNSET = INT_MAX;
 
-    UNSET = INT_MAX
-};
+/* Logging levels are sc_core::sc_verbosity values:
+ *   SC_LOW (100)=CRITICAL  SC_MEDIUM (200)=ALERT  SC_HIGH (300)=NOTE
+ *   SC_FULL (400)=DETAIL   SC_DEBUG (500)=INTERNAL.  SC_NONE (0)="off".
+ * Textual level names and string parsing are an SCP convenience
+ * (scp::as_log / scp::level_name in cci_report_backend.h). */
 
-extern const std::map<sc_log_level, std::string> log_level_map;
-
-/* Convert integer to sc_log_level.
- *   0-99:  small int (0=NONE, 1-3=WARN, 4=INFO, 5=DEBUG, 6+=TRACE)
- *   >=100: sc_verbosity value (100=WARN, 200=INFO, 400=DEBUG, 500=TRACE) */
-inline sc_log_level as_log(int v) {
-    if (v < 100) {
-        if (v <= 0) return sc_log_level::NONE;
-        if (v <= 3) return sc_log_level::WARN;
-        if (v == 4) return sc_log_level::INFO;
-        if (v == 5) return sc_log_level::DEBUG;
-        return sc_log_level::TRACE;
-    }
-    for (auto& [lvl, name] : log_level_map) {
-        if (v <= static_cast<int>(lvl))
-            return lvl;
-    }
-    return sc_log_level::TRACE;
-}
-
-/* Convert string to sc_log_level.
- * Accepts canonical names (NONE, CRITICAL, WARN, INFO, DEBUG, TRACE)
- * and convenience aliases (FATAL, ERROR, WARNING, TRACEALL, DBGTRACE). */
-inline sc_log_level as_log(const std::string& name) {
-    for (auto& [lvl, str] : log_level_map) {
-        if (name == str) return lvl;
-    }
-    if (name == "WARNING") return sc_log_level::WARN;
-    if (name == "FATAL" || name == "ERROR") return sc_log_level::CRITICAL;
-    if (name == "TRACEALL" || name == "DBGTRACE") return sc_log_level::TRACE;
-    return sc_log_level::TRACE;
-}
-
-inline std::istream& operator>>(std::istream& is, sc_log_level& val) {
-    std::string buf;
-    is >> buf;
-    val = as_log(buf);
-    return is;
-}
-
-inline std::ostream& operator<<(std::ostream& os, sc_log_level const& val) {
-    auto m = log_level_map;
-    os << m[val];
-    return os;
+/* Bucket a raw verbosity to the nearest level at or above it. */
+inline sc_verbosity as_log(int v) {
+    if (v <= sc_core::SC_LOW)    return sc_core::SC_LOW;
+    if (v <= sc_core::SC_MEDIUM) return sc_core::SC_MEDIUM;
+    if (v <= sc_core::SC_HIGH)   return sc_core::SC_HIGH;
+    if (v <= sc_core::SC_FULL)   return sc_core::SC_FULL;
+    return sc_core::SC_DEBUG;
 }
 
 class sc_log_priv__call_sc_name_fn {
@@ -145,17 +109,17 @@ public:
 struct sc_log_impl;
 
 struct sc_log_logger_cache {
-    sc_log_level level = sc_log_level::UNSET;
+    int level = SC_UNSET;
     std::string tag{};
     std::string scname{};
     const char* typename_str = nullptr;
 
-    sc_log_level get_log_verbosity_cached(const char* file, int line,
+    int get_log_verbosity_cached(const char* file, int line,
                                           std::string_view local_tag = {});
 
     void set_tag(std::string new_tag) {
         tag = std::move(new_tag);
-        level = sc_log_level::UNSET;
+        level = SC_UNSET;
     }
 
     /// Lifecycle: set by get_log_verbosity_cached(), cleared by ~sc_logger().
@@ -166,7 +130,7 @@ struct sc_log_logger_cache {
 
 struct sc_log_handle_factory {
     template <class TYPE>
-    static sc_log_logger_cache make(sc_log_level lvl, const char* tag_str,
+    static sc_log_logger_cache make(int lvl, const char* tag_str,
                                     TYPE* p) {
         const char* n = sc_log_priv__call_sc_name_fn{}(p);
         const char* t = typeid(*p).name();
@@ -178,7 +142,7 @@ struct sc_log_handle_factory {
         };
     }
 
-    static sc_log_logger_cache make_static(sc_log_level lvl,
+    static sc_log_logger_cache make_static(int lvl,
                                            const char* tag_str) {
         return sc_log_logger_cache{
             lvl,
@@ -193,10 +157,10 @@ std::vector<std::string> get_logging_parameters();
 
 struct sc_log_impl {
     static void sc_set_log_verbosity_fn(
-        std::function<sc_log_level(sc_log_logger_cache&, const char*, int,
+        std::function<sc_verbosity(sc_log_logger_cache&, const char*, int,
                                    std::string_view)> fn);
 
-    static sc_log_level sc_get_log_verbosity(
+    static sc_verbosity sc_get_log_verbosity(
         sc_log_logger_cache& logger, const char* file, int line,
         std::string_view local_tag = {});
 };
@@ -204,7 +168,7 @@ struct sc_log_impl {
 template <sc_core::sc_severity SEVERITY, bool WITH_ACTIONS = false>
 struct sc_logger {
     sc_logger(const char* file, int line,
-              sc_log_level verbosity = sc_core::sc_log_level::INFO)
+              int verbosity = sc_core::SC_MEDIUM)
         : t(nullptr), file(file), line(line), level(verbosity) {}
 
     sc_logger() = delete;
@@ -246,7 +210,7 @@ protected:
     char* t{ nullptr };
     const char* file;
     const int line;
-    const sc_log_level level;
+    const int level;
 };
 
 } // namespace sc_core
@@ -342,30 +306,30 @@ static const char* SC_LOG_PRIV__FMT_EMPTY_STR = "";
 
 #define SC_LOG_PRIV__HANDLE0()                                                 \
     sc_core::sc_log_logger_cache SC_LOG_LOG_LEVEL_CACHE =                      \
-        sc_core::sc_log_handle_factory::make(sc_core::sc_log_level::UNSET,     \
+        sc_core::sc_log_handle_factory::make(sc_core::SC_UNSET,     \
                                              "", this)
 
 #define SC_LOG_PRIV__HANDLE1(tag_str)                                          \
     sc_core::sc_log_logger_cache SC_LOG_LOG_LEVEL_CACHE =                      \
-        sc_core::sc_log_handle_factory::make(sc_core::sc_log_level::UNSET,     \
+        sc_core::sc_log_handle_factory::make(sc_core::SC_UNSET,     \
                                              tag_str, this)
 
 #define SC_LOG_PRIV__HANDLE2(logger_name, tag_str)                             \
     sc_core::sc_log_logger_cache SC_LOG_PRIV__HANDLE_NAME(logger_name) =       \
-        sc_core::sc_log_handle_factory::make(sc_core::sc_log_level::UNSET,     \
+        sc_core::sc_log_handle_factory::make(sc_core::SC_UNSET,     \
                                              tag_str, this)
 
 /* Static handle variants — use inline for C++17 in-class initialization */
 #define SC_LOG_PRIV__HANDLE_STATIC1(tag_str)                                   \
     static inline sc_core::sc_log_logger_cache SC_LOG_LOG_LEVEL_CACHE =        \
         sc_core::sc_log_handle_factory::make_static(                           \
-            sc_core::sc_log_level::UNSET, tag_str)
+            sc_core::SC_UNSET, tag_str)
 
 #define SC_LOG_PRIV__HANDLE_STATIC2(logger_name, tag_str)                      \
     static inline sc_core::sc_log_logger_cache                                 \
         SC_LOG_PRIV__HANDLE_NAME(logger_name) =                                \
         sc_core::sc_log_handle_factory::make_static(                           \
-            sc_core::sc_log_level::UNSET, tag_str)
+            sc_core::SC_UNSET, tag_str)
 
 /*==========================================================================
  * Public API macros — matching SystemC 4.0 exactly
@@ -383,7 +347,7 @@ static const char* SC_LOG_PRIV__FMT_EMPTY_STR = "";
 #define SC_LOG_HANDLE_VECTOR_PUSH_BACK(NAME, tag_str)                          \
     SC_LOG_PRIV__HANDLE_NAME(NAME).push_back(                                  \
         sc_core::sc_log_handle_factory::make(                                  \
-            sc_core::sc_log_level::UNSET, tag_str, this))
+            sc_core::SC_UNSET, tag_str, this))
 
 #define SC_LOG_AT(lvl, ...)                                                    \
     if (SC_LOG_PRIV__VBSTY_CHECK_IMPL(SC_LOG_PRIV__NARG(__VA_ARGS__), lvl,    \
@@ -393,12 +357,18 @@ static const char* SC_LOG_PRIV__FMT_EMPTY_STR = "";
             .get()                                                             \
         << SC_LOG_PRIV__FMT_EMPTY_STR
 
+/* Convenience logging macros, one per level.  The names describe a message's
+ * *significance* (importance) to a reader — deliberately distinct from
+ * sc_severity (SC_INFO/SC_WARNING/...) and the raw sc_verbosity names —
+ * ordered most-significant to least, mapping onto increasing verbosity:
+ *   SC_CRITICAL (most) -> SC_LOW   SC_ALERT -> SC_MEDIUM   SC_NOTE -> SC_HIGH
+ *   SC_DETAIL -> SC_FULL           SC_INTERNAL (least) -> SC_DEBUG */
 #define SC_CRITICAL(...)                                                       \
-    SC_LOG_AT(sc_core::sc_log_level::CRITICAL, ##__VA_ARGS__)
-#define SC_WARN(...) SC_LOG_AT(sc_core::sc_log_level::WARN, ##__VA_ARGS__)
-#define SC_INFO(...) SC_LOG_AT(sc_core::sc_log_level::INFO, ##__VA_ARGS__)
-#define SC_DEBUG(...) SC_LOG_AT(sc_core::sc_log_level::DEBUG, ##__VA_ARGS__)
-#define SC_TRACE(...) SC_LOG_AT(sc_core::sc_log_level::TRACE, ##__VA_ARGS__)
+    SC_LOG_AT(sc_core::SC_LOW, ##__VA_ARGS__)
+#define SC_ALERT(...) SC_LOG_AT(sc_core::SC_MEDIUM, ##__VA_ARGS__)
+#define SC_NOTE(...) SC_LOG_AT(sc_core::SC_HIGH, ##__VA_ARGS__)
+#define SC_DETAIL(...) SC_LOG_AT(sc_core::SC_FULL, ##__VA_ARGS__)
+#define SC_INTERNAL(...) SC_LOG_AT(sc_core::SC_DEBUG, ##__VA_ARGS__)
 
 #endif /* !SC_HAS_SC_LOG */
 #endif /* _SCP_SC_LOG_H_ */

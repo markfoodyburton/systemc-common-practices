@@ -36,20 +36,20 @@
 
 SC_MODULE (test4) {
     SC_CTOR (test4) {
-        SC_INFO() << " .   T4 Logger() 1";
-        SC_WARN() << " .   T4 Logger() 1";
-        SC_INFO() << " .   T4 Logger() 2";
-        SC_WARN() << " .   T4 Logger() 2";
+        SC_NOTE() << " .   T4 Logger() 1";
+        SC_ALERT() << " .   T4 Logger() 1";
+        SC_NOTE() << " .   T4 Logger() 2";
+        SC_ALERT() << " .   T4 Logger() 2";
     }
     SC_LOG_HANDLE();
 };
 
 SC_MODULE (test3) {
     SC_CTOR (test3) {
-        SC_INFO(D) << " .  T3 D Logger \"other\" \"feature.one\"";
-        SC_WARN(D) << " .  T3 D Logger \"other\" \"feature.one\"";
-        SC_INFO() << " .  T3 Logger ()";
-        SC_WARN() << " .  T3 Logger ()";
+        SC_NOTE(D) << " .  T3 D Logger \"other\" \"feature.one\"";
+        SC_ALERT(D) << " .  T3 D Logger \"other\" \"feature.one\"";
+        SC_NOTE() << " .  T3 Logger ()";
+        SC_ALERT() << " .  T3 Logger ()";
     }
     SC_LOG_HANDLE(D, "other");
     SC_LOG_HANDLE();
@@ -57,8 +57,8 @@ SC_MODULE (test3) {
 
 SC_MODULE (test2) {
     SC_CTOR (test2) : t31("t3_1"), t32("t3_2"), t4("t4") {
-            SC_INFO() << "  T2 Logger()";
-            SC_WARN() << "  T2 Logger()";
+            SC_NOTE() << "  T2 Logger()";
+            SC_ALERT() << "  T2 Logger()";
         }
     SC_LOG_HANDLE();
     test3 t31, t32;
@@ -67,17 +67,17 @@ SC_MODULE (test2) {
 
 SC_MODULE (test1) {
     SC_CTOR (test1) : t2("t2") {
-            SC_WARN(my_name_logger) << " T1 My.Name typed log";
-            SC_INFO() << " T1 Logger()";
-            SC_WARN() << " T1 Logger()";
+            SC_ALERT(my_name_logger) << " T1 My.Name typed log";
+            SC_NOTE() << " T1 Logger()";
+            SC_ALERT() << " T1 Logger()";
 
             SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "thing1");
             SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "thing2");
 
-            SC_INFO(vec[0]) << "Thing1?";
-            SC_WARN(vec[0]) << "Thing1?";
-            SC_INFO(vec[1]) << "Thing2?";
-            SC_WARN(vec[1]) << "Thing2?";
+            SC_NOTE(vec[0]) << "Thing1?";
+            SC_ALERT(vec[0]) << "Thing1?";
+            SC_NOTE(vec[1]) << "Thing2?";
+            SC_ALERT(vec[1]) << "Thing2?";
         }
     SC_LOG_HANDLE("something");
     SC_LOG_HANDLE(my_name_logger, "My.Name");
@@ -91,28 +91,28 @@ class outside_class
 {
 public:
     outside_class() {
-        SC_INFO(out_class_logger)("constructor");
-        SC_WARN(out_class_logger)("constructor");
+        SC_NOTE(out_class_logger)("constructor");
+        SC_ALERT(out_class_logger)("constructor");
     }
 };
 
 SC_MODULE (test) {
     outside_class oc;
     SC_CTOR (test) {
-        SC_DEBUG() << "First part";
+        SC_DETAIL() << "First part";
         scp::tlm_extensions::path_trace ext;
         ext.stamp(this);
-        SC_INFO() << ext.to_string();
+        SC_NOTE() << ext.to_string();
         ext.reset();
 
         ext.stamp(this);
         ext.stamp(this);
         ext.stamp(this);
 
-        SC_INFO() << ext.to_string();
+        SC_NOTE() << ext.to_string();
         ext.reset();
 
-        SC_DEBUG() << "Second part";
+        SC_DETAIL() << "Second part";
         scp::tlm_extensions::initiator_id mid(0x1234);
         mid = 0x2345;
         mid &= 0xff;
@@ -126,10 +126,10 @@ SC_MODULE (test) {
         }
 
         SC_REPORT_INFO("SystemC", "Uncached version empty");
-        SC_INFO()("FMT String : Cached version default");
-        SC_INFO() << "UnCached version feature using SCMOD macro";
-        SC_INFO(m_my_logger) << "Cached version using (m_my_logger)";
-        SC_INFO(D) << "Cached version with D";
+        SC_NOTE()("FMT String : Cached version default");
+        SC_NOTE() << "UnCached version feature using SCMOD macro";
+        SC_NOTE(m_my_logger) << "Cached version using (m_my_logger)";
+        SC_NOTE(D) << "Cached version with D";
     }
 
     SC_LOG_HANDLE(m_my_logger, "my_logger");
@@ -161,13 +161,13 @@ int sc_main(int argc, char** argv) {
             .printSimTime(false)
             .displayNameStyle(scp::DisplayName::SCNAME)
             .logFileName(logfile)); // make the msg type column a bit tighter
-    SC_INFO() << "Constructing design";
+    SC_NOTE() << "Constructing design";
     test toptest("top");
     test1 t1("t1");
 
-    SC_INFO() << "Starting simulation";
+    SC_NOTE() << "Starting simulation";
     sc_core::sc_start();
-    SC_WARN() << "Ending simulation";
+    SC_ALERT() << "Ending simulation";
 
 #ifdef FMT_SHARED
     std::string fmtstr = "FMT String : Cached version default";
@@ -176,39 +176,30 @@ int sc_main(int argc, char** argv) {
 #endif
 
     std::string expected =
-        R"([    info] [                0 s ]SystemC             : Constructing design
-[    info] [                0 s ]out.class           : constructor
-[ warning] [                0 s ]out.class           : constructor
-[   debug] [                0 s ]top                 : First part
-[    info] [                0 s ]top                 : top
-[    info] [                0 s ]top                 : top->top->top
-[   debug] [                0 s ]top                 : Second part
-[    info] [                0 s ]ext test            : Success
-[    info] [                0 s ]SystemC             : Uncached version empty
-[    info] [                0 s ]top                 : )" +
+        R"([NOTE] [                0 s ]SystemC             : Constructing design
+[NOTE] [                0 s ]out.class           : constructor
+[ALERT] [                0 s ]out.class           : constructor
+[NOTE] [                0 s ]top                 : top
+[NOTE] [                0 s ]top                 : top->top->top
+[ALERT] [                0 s ]ext test            : Success
+[ALERT] [                0 s ]SystemC             : Uncached version empty
+[NOTE] [                0 s ]top                 : )" +
         fmtstr + R"(
-[    info] [                0 s ]top                 : UnCached version feature using SCMOD macro
-[    info] [                0 s ]top                 : Cached version using (m_my_logger)
-[    info] [                0 s ]top                 : Cached version with D
-[    info] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
-[ warning] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
-[    info] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
-[ warning] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
-[    info] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
-[ warning] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
-[ warning] [                0 s ]t1.t2.t3_2          :  .  T3 Logger ()
-[    info] [                0 s ]t1.t2.t4            :  .   T4 Logger() 1
-[ warning] [                0 s ]t1.t2.t4            :  .   T4 Logger() 1
-[    info] [                0 s ]t1.t2.t4            :  .   T4 Logger() 2
-[ warning] [                0 s ]t1.t2.t4            :  .   T4 Logger() 2
-[ warning] [                0 s ]t1.t2               :   T2 Logger()
-[ warning] [                0 s ]t1                  :  T1 My.Name typed log
-[ warning] [                0 s ]t1                  :  T1 Logger()
-[    info] [                0 s ]t1                  : Thing1?
-[ warning] [                0 s ]t1                  : Thing1?
-[ warning] [                0 s ]t1                  : Thing2?
-[    info] [                0 s ]SystemC             : Starting simulation
-[ warning] [                0 s ]SystemC             : Ending simulation
+[NOTE] [                0 s ]top                 : UnCached version feature using SCMOD macro
+[NOTE] [                0 s ]top                 : Cached version using (m_my_logger)
+[NOTE] [                0 s ]top                 : Cached version with D
+[NOTE] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
+[ALERT] [                0 s ]t1.t2.t3_1          :  .  T3 D Logger "other" "feature.one"
+[NOTE] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
+[ALERT] [                0 s ]t1.t2.t3_1          :  .  T3 Logger ()
+[NOTE] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
+[ALERT] [                0 s ]t1.t2.t3_2          :  .  T3 D Logger "other" "feature.one"
+[ALERT] [                0 s ]t1.t2.t4            :  .   T4 Logger() 1
+[ALERT] [                0 s ]t1.t2.t4            :  .   T4 Logger() 2
+[NOTE] [                0 s ]t1                  : Thing1?
+[ALERT] [                0 s ]t1                  : Thing1?
+[NOTE] [                0 s ]SystemC             : Starting simulation
+[ALERT] [                0 s ]SystemC             : Ending simulation
 )";
 
     std::ifstream lf(logfile);

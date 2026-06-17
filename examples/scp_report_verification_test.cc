@@ -17,8 +17,8 @@
  * scp_report_verification_test.cc — Verification of the SC_LOG API
  * used with the SCP report backend, covering:
  *   - All SC_LOG_HANDLE forms (default, named, tagged, static, vector)
- *   - All SC_INFO/SC_WARN/etc. call forms (handle, tag override, string tag)
- *   - All severity levels (TRACE, DEBUG, INFO, WARN, CRITICAL)
+ *   - All SC_NOTE/SC_ALERT/etc. call forms (handle, tag override, string tag)
+ *   - All log levels (INTERNAL, DETAIL, NOTE, ALERT, CRITICAL)
  *   - CCI value types (small int, large int, string)
  *   - CCI matching patterns (global, hierarchy, feature, wildcard)
  *   - All display name styles (AUTO, FULL, TAG, SCNAME, FEATURES)
@@ -87,27 +87,27 @@ SC_MODULE(deep_child) {
         SC_LOG_HANDLE_VECTOR_PUSH_BACK(vec, "vec.tag");
 
         // --- All severity levels from default handle ---
-        SC_TRACE()     << "child TRACE";
-        SC_DEBUG()     << "child DEBUG";
-        SC_INFO()      << "child INFO";
-        SC_WARN()      << "child WARN";
+        SC_INTERNAL()     << "child INTERNAL";
+        SC_DETAIL()     << "child DETAIL";
+        SC_NOTE()      << "child NOTE";
+        SC_ALERT()      << "child ALERT";
         SC_CRITICAL()  << "child CRITICAL";
 
         // --- Named handle ---
-        SC_INFO(dmi_h) << "child DMI info";
+        SC_NOTE(dmi_h) << "child DMI info";
 
         // --- Handle + tag override (2-arg form) ---
-        SC_INFO(SC_LOG_LOG_LEVEL_CACHE, "override.tag") << "child default+tag";
-        SC_INFO(dmi_h, "extra.tag") << "child DMI+tag";
+        SC_NOTE(SC_LOG_LOG_LEVEL_CACHE, "override.tag") << "child default+tag";
+        SC_NOTE(dmi_h, "extra.tag") << "child DMI+tag";
 
         // --- Vector handle ---
-        SC_INFO(vec[0]) << "child vec[0]";
+        SC_NOTE(vec[0]) << "child vec[0]";
 
         // --- Named handle (native.tag) ---
-        SC_INFO(native_h) << "child native handle";
+        SC_NOTE(native_h) << "child native handle";
 
         // --- String tag form (global logger path) ---
-        SC_WARN("child.string.tag") << "child string-tag";
+        SC_ALERT("child.string.tag") << "child string-tag";
     }
 };
 
@@ -118,8 +118,8 @@ SC_MODULE(mid) {
     deep_child child;
 
     SC_CTOR(mid) : child("child") {
-        SC_INFO() << "mid constructed";
-        SC_WARN("mid.string.tag") << "mid string-tag";
+        SC_NOTE() << "mid constructed";
+        SC_ALERT("mid.string.tag") << "mid string-tag";
     }
 };
 
@@ -129,9 +129,9 @@ SC_MODULE(sibling_mod) {
     SC_LOG_HANDLE(extra_h, "extra.feat");         // named handle with tag
 
     SC_CTOR(sibling_mod) {
-        SC_INFO()         << "sibling constructed";
-        SC_INFO(extra_h)  << "sibling Extra logger";
-        SC_WARN("sibling.string.tag") << "sibling string-tag";
+        SC_NOTE()         << "sibling constructed";
+        SC_NOTE(extra_h)  << "sibling Extra logger";
+        SC_ALERT("sibling.string.tag") << "sibling string-tag";
     }
 };
 
@@ -152,26 +152,26 @@ SC_MODULE(test_driver) {
     void phase_display_styles() {
         // Phase 2: cycle through all display styles
         scp::set_display_name_style(scp::DisplayName::AUTO);
-        SC_INFO() << "PHASE2 AUTO";
+        SC_NOTE() << "PHASE2 AUTO";
 
         scp::set_display_name_style(scp::DisplayName::FULL);
-        SC_INFO() << "PHASE2 FULL";
+        SC_NOTE() << "PHASE2 FULL";
 
         scp::set_display_name_style(scp::DisplayName::TAG);
-        SC_INFO() << "PHASE2 TAG";
+        SC_NOTE() << "PHASE2 TAG";
 
         scp::set_display_name_style(scp::DisplayName::SCNAME);
-        SC_INFO() << "PHASE2 SCNAME";
+        SC_NOTE() << "PHASE2 SCNAME";
 
         scp::set_display_name_style(scp::DisplayName::FEATURES);
-        SC_INFO() << "PHASE2 FEATURES";
+        SC_NOTE() << "PHASE2 FEATURES";
 
         // Also test named handle through styles
         scp::set_display_name_style(scp::DisplayName::AUTO);
-        SC_INFO(feat_h) << "PHASE2 feat AUTO";
+        SC_NOTE(feat_h) << "PHASE2 feat AUTO";
 
         scp::set_display_name_style(scp::DisplayName::FULL);
-        SC_INFO(feat_h) << "PHASE2 feat FULL";
+        SC_NOTE(feat_h) << "PHASE2 feat FULL";
 
         // Restore AUTO for remaining phases
         scp::set_display_name_style(scp::DisplayName::AUTO);
@@ -182,21 +182,21 @@ SC_MODULE(test_driver) {
 
         // Phase 3: silence DMI by feature name
         scp::set_log_level("dmi", scp::log::CRITICAL);
-        SC_INFO() << "PHASE3 default still active";
+        SC_NOTE() << "PHASE3 default still active";
 
         wait(10, sc_core::SC_NS);
 
         // Phase 4: reset caches — all loggers re-evaluate from CCI
         scp::reset_logging();
-        SC_INFO() << "PHASE4 default after reset";
+        SC_NOTE() << "PHASE4 default after reset";
 
         wait(10, sc_core::SC_NS);
 
         // Phase 5: change global level to suppress DEBUG
         scp::set_logging_level(scp::log::INFO);
         scp::reset_logging();
-        SC_DEBUG() << "PHASE5 debug should be suppressed";
-        SC_INFO()  << "PHASE5 info still visible";
+        SC_DETAIL() << "PHASE5 debug should be suppressed";
+        SC_NOTE()  << "PHASE5 info still visible";
     }
 
     void run() {
@@ -208,11 +208,11 @@ SC_MODULE(test_driver) {
         SC_THREAD(run);
 
         // Log from the driver during elaboration
-        SC_INFO() << "driver constructed";
-        SC_INFO(feat_h) << "driver feat_h";
+        SC_NOTE() << "driver constructed";
+        SC_NOTE(feat_h) << "driver feat_h";
 
         // Global static logger
-        SC_INFO(global_logger) << "global static log";
+        SC_NOTE(global_logger) << "global static log";
     }
 };
 
@@ -226,9 +226,9 @@ int sc_main(int argc, char** argv) {
     cci::cci_originator orig("config");
 
     /* CCI value forms */
-    // Small int (0-99 range)
+    // Small int (0-99 range): 1-3=CRITICAL, 4=ALERT, 5=NOTE, 6+=INTERNAL
     broker.set_preset_cci_value("log_level",
-        cci::cci_value(1), orig);                          // global: WARN
+        cci::cci_value(4), orig);                          // global: ALERT
     broker.set_preset_cci_value("top.log_level",
         cci::cci_value(5), orig);                          // hierarchy: DEBUG
 
@@ -248,7 +248,7 @@ int sc_main(int argc, char** argv) {
     broker.set_preset_cci_value("sib.feature.log_level",
         cci::cci_value(5), orig);                          // feature: DEBUG
     broker.set_preset_cci_value("extra.feat.log_level",
-        cci::cci_value(4), orig);                          // feature: INFO
+        cci::cci_value(5), orig);                          // feature: NOTE
     broker.set_preset_cci_value("native.tag.log_level",
         cci::cci_value(5), orig);                          // native handle
     broker.set_preset_cci_value("vec.tag.log_level",
@@ -291,13 +291,13 @@ int sc_main(int argc, char** argv) {
 
     // deep_child at top.m.child — log_level=500 (TRACE via large int)
     check("child TRACE visible (large int CCI=500)",
-          has("child TRACE"));
+          has("child INTERNAL"));
     check("child DEBUG visible",
-          has("child DEBUG"));
+          has("child DETAIL"));
     check("child INFO visible",
-          has("child INFO"));
+          has("child NOTE"));
     check("child WARN visible",
-          has("child WARN"));
+          has("child ALERT"));
     check("child CRITICAL visible",
           has("child CRITICAL"));
 
@@ -398,7 +398,7 @@ int sc_main(int argc, char** argv) {
           has("driver constructed"));
     // Large int 500 (top.m.child.log_level) → TRACE
     check("large int CCI=500 enables TRACE",
-          has("child TRACE"));
+          has("child INTERNAL"));
     // String "DEBUG" (dmi.log_level) → DEBUG
     check("string CCI='DEBUG' enables DEBUG",
           has("child DMI info"));

@@ -67,7 +67,7 @@ cci::cci_originator scp_global_originator("scp_reporting_global");
 std::set<std::string> logging_parameters;
 std::multimap<std::string, sc_core::sc_log_logger_cache*> logger_caches;
 std::mutex logger_caches_mutex;
-std::unordered_map<std::string, sc_core::sc_log_level> tag_lut;
+std::unordered_map<std::string, sc_core::sc_verbosity> tag_lut;
 std::shared_mutex tag_lut_mutex;
 
 struct ExtLogConfig : public scp::LogConfig {
@@ -205,13 +205,38 @@ inline const char* get_display_name(const sc_core::sc_report& rep) {
     }
 }
 
-auto compose_message(const sc_core::sc_report& rep, const scp::LogConfig& cfg)
+/* Label for a report's level.  `full` selects the full level name (used by the
+ * file logger) over the single letter (used by the console).  sc_log messages
+ * arrive as severity SC_INFO with the level carried in the verbosity; real
+ * SystemC reports use their severity. */
+inline std::string scp_level_label(const sc_core::sc_report& rep, bool full) {
+    std::string name;
+    switch (rep.get_severity()) {
+    case sc_core::SC_WARNING: name = "WARNING"; break;
+    case sc_core::SC_ERROR:   name = "ERROR";   break;
+    case sc_core::SC_FATAL:   name = "FATAL";   break;
+    default: { // SC_INFO -> SC_LOG level carried in the verbosity; name it via
+               // the shared level<->name map (bucketing any int to a level)
+        int v = rep.get_verbosity();
+        if (v > sc_core::SC_NONE && v < sc_core::SC_LOW) v *= 10;
+        name = scp::level_name(sc_core::as_log(v));
+        break;
+    }
+    }
+    // the single-letter form is just the first character of the name
+    return full ? name : name.substr(0, 1);
+}
+
+auto compose_message(const sc_core::sc_report& rep, const scp::LogConfig& cfg,
+                     bool full_label = false)
     -> const std::string {
     if (rep.get_severity() > sc_core::SC_INFO ||
         cfg.log_filter_regex.length() == 0 ||
         rep.get_verbosity() == sc_core::SC_MEDIUM ||
         log_cfg.match(rep.get_msg_type())) {
         std::stringstream os;
+        if (cfg.print_severity)
+            os << "[" << scp_level_label(rep, full_label) << "] ";
         if (likely(cfg.print_sim_time)) {
             if (unlikely(log_cfg.cycle_base.value())) {
                 if (unlikely(cfg.print_delta))
@@ -273,28 +298,34 @@ inline auto get_verbosity(const sc_core::sc_report& rep) -> int {
 }
 
 inline void log2logger(spdlog::logger& logger, const sc_core::sc_report& rep,
-                       const scp::LogConfig& cfg) {
-    auto msg = compose_message(rep, cfg);
+                       const scp::LogConfig& cfg, bool full_label = false) {
+    auto msg = compose_message(rep, cfg, full_label);
     if (!msg.size())
         return;
     switch (rep.get_severity()) {
     case sc_core::SC_INFO:
+        /* Map the SC_LOG level (carried in the verbosity) to an spdlog level
+         * for threshold filtering / flush / colour.  Kept consistent with the
+         * set_logging_level() threshold switch: more verbose -> lower spdlog
+         * level.  The printed label comes from compose_message, not from here. */
         switch (get_verbosity(rep)) {
-        case sc_core::SC_DEBUG:
-        case sc_core::SC_FULL:
+        case sc_core::SC_DEBUG:   // INTERNAL
             logger.trace(msg);
             break;
-        case sc_core::SC_HIGH:
+        case sc_core::SC_FULL:    // DETAIL
             logger.debug(msg);
             break;
-        case sc_core::SC_LOW:
+        case sc_core::SC_HIGH:    // NOTE
+            logger.info(msg);
+            break;
+        case sc_core::SC_MEDIUM:  // ALERT
             logger.warn(msg);
             break;
-        case sc_core::SC_NONE:
+        case sc_core::SC_LOW:     // CRITICAL
             logger.critical(msg);
             break;
         default:
-            logger.info(msg);
+            logger.trace(msg);
             break;
         }
         break;
@@ -331,7 +362,8 @@ void report_handler(const sc_core::sc_report& rep,
                 lcfg.print_sim_time = true;
                 if (!lcfg.msg_type_field_width)
                     lcfg.msg_type_field_width = 24;
-                log2logger(*log_cfg.file_logger, rep, lcfg);
+                /* file logger uses the full level name; console uses the letter */
+                log2logger(*log_cfg.file_logger, rep, lcfg, /*full_label=*/true);
             }
         }
     }
@@ -364,9 +396,9 @@ void report_handler(const sc_core::sc_report& rep,
 } // namespace
 
 /* Convert CCI integer or string values to sc_verbosity.
- *   0-99:  small int (0=NONE, 1-3=WARN, 4=INFO, 5=DEBUG, 6+=TRACE)
- *   >=100: sc_verbosity value (100=WARN, 200=INFO, 400=DEBUG, 500=TRACE)
- *   string: canonical or convenience name */
+ *   0-99:  small int (0=off, 1-3=CRITICAL, 4=ALERT, 5=NOTE, 6+=INTERNAL)
+ *   >=100: sc_verbosity value used directly (100=CRITICAL .. 500=INTERNAL)
+ *   string: resolved by scp::as_log (canonical + legacy spellings) */
 static sc_core::sc_verbosity cci_to_verbosity(int v) {
     if (v < 100) {
         if (v <= 0) return sc_core::SC_NONE;
@@ -379,11 +411,13 @@ static sc_core::sc_verbosity cci_to_verbosity(int v) {
 }
 
 static sc_core::sc_verbosity cci_to_verbosity(const std::string& name) {
-    return static_cast<sc_core::sc_verbosity>(sc_core::as_log(name));
+    /* Level-name parsing (canonical + legacy spellings) is an SCP-layer
+     * convenience; upstream SystemC core ships no level<->text mapping. */
+    return scp::as_log(name);
 }
 
 #ifdef HAS_CCI
-static sc_core::sc_log_level scp_cci_log_verbosity(
+static sc_core::sc_verbosity scp_cci_log_verbosity(
     sc_core::sc_log_logger_cache& logger, const char* file, int line,
     std::string_view local_tag);
 #endif
@@ -426,13 +460,15 @@ static void configure_logging() {
                                            "console_logger")
                                      : spdlog::stdout_color_mt(
                                            "console_logger");
-        auto logger_fmt = log_cfg.print_severity ? "[%L] %v" : "%v";
+        /* The level label (e.g. "[C] ") is prepended in compose_message, so
+         * the spdlog pattern only needs the message body. */
+        const char* logger_fmt = "%v";
         if (log_cfg.colored_output) {
             std::ostringstream os;
             os << "%^" << logger_fmt << "%$";
             log_cfg.console_logger->set_pattern(os.str());
         } else
-            log_cfg.console_logger->set_pattern("[%L] %v");
+            log_cfg.console_logger->set_pattern("%v");
         log_cfg.console_logger->flush_on(spdlog::level::warn);
         log_cfg.console_logger->set_level(spdlog::level::level_enum::trace);
         if (log_cfg.log_file_name.size()) {
@@ -449,10 +485,8 @@ static void configure_logging() {
                                       : spdlog::basic_logger_mt(
                                             "file_logger",
                                             log_cfg.log_file_name);
-            if (log_cfg.print_severity)
-                log_cfg.file_logger->set_pattern("[%8l] %v");
-            else
-                log_cfg.file_logger->set_pattern("%v");
+            /* Level label is embedded in the message by compose_message. */
+            log_cfg.file_logger->set_pattern("%v");
             log_cfg.file_logger->flush_on(spdlog::level::warn);
             log_cfg.file_logger->set_level(spdlog::level::level_enum::trace);
         }
@@ -475,7 +509,7 @@ scp::LogHandler::LogHandler(scp::LogConfig config) {
     configure_logging();
 }
 
-scp::LogHandler::LogHandler(scp::log level, unsigned type_field_width,
+scp::LogHandler::LogHandler(sc_core::sc_verbosity level, unsigned type_field_width,
                             bool print_time):
     LogHandler(LogConfig{}
                    .logLevel(level)
@@ -498,25 +532,25 @@ scp::LogHandler::~LogHandler() {
     spdlog::shutdown();
 }
 
-void scp::set_logging_level(scp::log level) {
+void scp::set_logging_level(sc_core::sc_verbosity level) {
     log_cfg.level = level;
     sc_core::sc_report_handler::set_verbosity_level(
         static_cast<sc_core::sc_verbosity>(level));
     spdlog::level::level_enum spdlvl;
     switch (level) {
-    case scp::log::CRITICAL:
+    case sc_core::SC_LOW:     // CRITICAL
         spdlvl = spdlog::level::critical;
         break;
-    case scp::log::WARN:
+    case sc_core::SC_MEDIUM:  // ALERT
         spdlvl = spdlog::level::warn;
         break;
-    case scp::log::INFO:
+    case sc_core::SC_HIGH:    // NOTE
         spdlvl = spdlog::level::info;
         break;
-    case scp::log::DEBUG:
+    case sc_core::SC_FULL:    // DETAIL
         spdlvl = spdlog::level::debug;
         break;
-    case scp::log::TRACE:
+    case sc_core::SC_DEBUG:   // INTERNAL
         spdlvl = spdlog::level::trace;
         break;
     default:
@@ -526,7 +560,7 @@ void scp::set_logging_level(scp::log level) {
     log_cfg.console_logger->set_level(spdlvl);
 }
 
-auto scp::get_logging_level() -> scp::log {
+auto scp::get_logging_level() -> sc_core::sc_verbosity {
     return log_cfg.level;
 }
 
@@ -543,11 +577,11 @@ void scp::reset_logging() {
     { std::unique_lock<std::shared_mutex> lk(tag_lut_mutex); tag_lut.clear(); }
     auto range = logger_caches.equal_range("");
     for (auto it = range.first; it != range.second; ++it) {
-        it->second->level = sc_core::sc_log_level::UNSET;
+        it->second->level = sc_core::SC_UNSET;
     }
 }
 
-void scp::set_log_level(const std::string& name, scp::log level) {
+void scp::set_log_level(const std::string& name, sc_core::sc_verbosity level) {
     std::lock_guard<std::mutex> lock(logger_caches_mutex);
     auto range = logger_caches.equal_range(name);
     for (auto it = range.first; it != range.second; ++it) {
@@ -564,7 +598,7 @@ void scp::set_logger_tag(sc_core::sc_log_logger_cache& logger,
     }
 }
 
-auto scp::LogConfig::logLevel(scp::log level) -> scp::LogConfig& {
+auto scp::LogConfig::logLevel(sc_core::sc_verbosity level) -> scp::LogConfig& {
     this->level = level;
     return *this;
 }
@@ -725,7 +759,7 @@ void insert(std::multimap<int, std::string, std::greater<int>>& map,
 /* CCI-based verbosity callback for SC_LOG.
  * Replicates old SCP's feature-priority CCI lookup using the logger's
  * tag (comma-separated features), scname, and typename. */
-static sc_core::sc_log_level scp_cci_log_verbosity(
+static sc_core::sc_verbosity scp_cci_log_verbosity(
     sc_core::sc_log_logger_cache& logger, const char* file, int line,
     std::string_view local_tag) {
     /* Fast path: per-tag LUT for string-tag lookups */
@@ -794,7 +828,7 @@ static sc_core::sc_log_level scp_cci_log_verbosity(
      * filename alone doesn't make a logger non-anonymous — it's just
      * additional context when a scname/tag/typename is present. */
     if (scname_str.empty() && features.empty() && tname_str.empty()) {
-        return static_cast<sc_core::sc_log_level>(
+        return static_cast<sc_core::sc_verbosity>(
             ::sc_core::sc_report_handler::get_verbosity_level());
     }
 
@@ -802,7 +836,7 @@ static sc_core::sc_log_level scp_cci_log_verbosity(
      * Other threads (e.g. QEMU) get the global default without caching,
      * so the next call from the SystemC thread will resolve correctly. */
     if (std::this_thread::get_id() != sysc_thread_id) {
-        return static_cast<sc_core::sc_log_level>(
+        return static_cast<sc_core::sc_verbosity>(
             ::sc_core::sc_report_handler::get_verbosity_level());
     }
 
@@ -848,7 +882,7 @@ static sc_core::sc_log_level scp_cci_log_verbosity(
         for (auto& [priority, name] : allfeatures) {
             sc_core::sc_verbosity v = cci_lookup(broker, name);
             if (v != SCP_VERBOSITY_UNSET) {
-                auto lvl = static_cast<sc_core::sc_log_level>(v);
+                auto lvl = static_cast<sc_core::sc_verbosity>(v);
                 if (local_tag.empty() && &logger != &SC_LOG_LOG_LEVEL_CACHE_GLOBAL)
                     logger.level = lvl;
                 else if (!local_tag.empty()) {
@@ -862,7 +896,7 @@ static sc_core::sc_log_level scp_cci_log_verbosity(
         // If there is no global broker, revert to initialized verbosity level
     }
 
-    auto lvl = static_cast<sc_core::sc_log_level>(
+    auto lvl = static_cast<sc_core::sc_verbosity>(
         ::sc_core::sc_report_handler::get_verbosity_level());
     if (local_tag.empty() && &logger != &SC_LOG_LOG_LEVEL_CACHE_GLOBAL)
         logger.level = lvl;

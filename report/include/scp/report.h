@@ -44,7 +44,7 @@ public:
 
 /* Legacy free functions — use LogHandler directly in new code.
  * init_logging creates a static LogHandler that lives until program exit. */
-inline void init_logging(log level = log::WARN, unsigned type_field_width = 24,
+inline void init_logging(sc_core::sc_verbosity level = log::WARN, unsigned type_field_width = 24,
                          bool print_time = false) {
     static LogHandler handler(level, type_field_width, print_time);
 }

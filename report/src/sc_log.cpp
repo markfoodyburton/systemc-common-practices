@@ -46,27 +46,17 @@
 
 namespace sc_core {
 
-/* Log level map — matches SystemC 4.0's sc_log.cpp */
-const std::map<sc_log_level, std::string> log_level_map = {
-    {sc_log_level::CRITICAL, "CRITICAL"},
-    {sc_log_level::NONE, "NONE"},
-    {sc_log_level::WARN, "WARN"},
-    {sc_log_level::INFO, "INFO"},
-    {sc_log_level::DEBUG, "DEBUG"},
-    {sc_log_level::TRACE, "TRACE"}
-};
-
 static thread_local sc_log_logger_cache* s_current = nullptr;
 
 sc_log_logger_cache* sc_log_logger_cache::get_current() { return s_current; }
 void sc_log_logger_cache::set_current(sc_log_logger_cache* p) { s_current = p; }
 
 /* get_log_verbosity_cached — delegates to sc_log_impl */
-sc_log_level sc_log_logger_cache::get_log_verbosity_cached(
+int sc_log_logger_cache::get_log_verbosity_cached(
     const char* file, int line, std::string_view local_tag)
 {
     s_current = this;
-    if (level != sc_log_level::UNSET) {
+    if (level != SC_UNSET) {
         return level;
     }
     return sc_log_impl::sc_get_log_verbosity(*this, file, line, local_tag);
@@ -76,7 +66,7 @@ sc_log_level sc_log_logger_cache::get_log_verbosity_cached(
 
 /* Global default logger (in global namespace, same as SystemC 4.0's sc_log.cpp) */
 sc_core::sc_log_logger_cache _m_sc_log_log_level_cache_{
-    sc_core::sc_log_level::UNSET,
+    sc_core::SC_UNSET,
     {},
     {},
     nullptr
@@ -88,19 +78,19 @@ sc_core::sc_log_logger_cache _m_sc_log_log_level_cache_{
  * simcontext.  Here we use a file-scope static std::function instead.
  */
 namespace {
-std::function<sc_core::sc_log_level(
+std::function<sc_core::sc_verbosity(
     sc_core::sc_log_logger_cache&, const char*, int, std::string_view)>
     s_dynamic_log_verbosity;
 } // anonymous namespace
 
 void sc_core::sc_log_impl::sc_set_log_verbosity_fn(
-    std::function<sc_log_level(sc_log_logger_cache&, const char*, int,
+    std::function<sc_verbosity(sc_log_logger_cache&, const char*, int,
                                std::string_view)> fn)
 {
     s_dynamic_log_verbosity = std::move(fn);
 }
 
-sc_core::sc_log_level sc_core::sc_log_impl::sc_get_log_verbosity(
+sc_core::sc_verbosity sc_core::sc_log_impl::sc_get_log_verbosity(
     sc_log_logger_cache& logger, const char* file, int line,
     std::string_view local_tag)
 {

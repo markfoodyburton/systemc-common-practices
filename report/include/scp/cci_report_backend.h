@@ -33,6 +33,7 @@
 #include <sysc/kernel/sc_time.h>
 #include <sysc/utils/sc_report.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -54,11 +55,67 @@
 //! @brief reporting utilities
 namespace scp {
 
-//! Log levels — alias for sc_core::sc_log_level.
-//! Native names: CRITICAL, WARN, INFO, DEBUG, TRACE, UNSET.
-//! Legacy SCP aliases (FATAL, ERROR, WARNING, TRACEALL, DBGTRACE) are
-//! available via the SC_LOG adaptation layer for backward compatibility.
-using log = sc_core::sc_log_level;
+//! Log levels live directly on the sc_core::sc_verbosity scale.  The level
+//! *type* is sc_core::sc_verbosity; `scp::log` is a namespace of named
+//! constants so existing call sites (scp::log::INFO, scp::log::TRACE, ...)
+//! keep compiling unchanged.
+//!
+//! Current names map: CRITICAL=SC_LOW(100), ALERT=SC_MEDIUM(200),
+//! NOTE=SC_HIGH(300), DETAIL=SC_FULL(400), INTERNAL=SC_DEBUG(500),
+//! NONE=SC_NONE(0).  The legacy SCP names (FATAL, ERROR, WARN, WARNING,
+//! INFO, DEBUG, TRACE, TRACEALL, DBGTRACE) remain available as aliases on
+//! the same scale for backward compatibility.
+namespace log {
+inline constexpr sc_core::sc_verbosity NONE = sc_core::SC_NONE;        //   0
+inline constexpr sc_core::sc_verbosity CRITICAL = sc_core::SC_LOW;     // 100
+inline constexpr sc_core::sc_verbosity FATAL = sc_core::SC_LOW;        // legacy
+inline constexpr sc_core::sc_verbosity ERROR = sc_core::SC_LOW;        // legacy
+inline constexpr sc_core::sc_verbosity ALERT = sc_core::SC_MEDIUM;     // 200
+inline constexpr sc_core::sc_verbosity WARN = sc_core::SC_MEDIUM;      // legacy
+inline constexpr sc_core::sc_verbosity WARNING = sc_core::SC_MEDIUM;   // legacy
+inline constexpr sc_core::sc_verbosity NOTE = sc_core::SC_HIGH;        // 300
+inline constexpr sc_core::sc_verbosity INFO = sc_core::SC_HIGH;        // legacy
+inline constexpr sc_core::sc_verbosity DETAIL = sc_core::SC_FULL;      // 400
+inline constexpr sc_core::sc_verbosity DEBUG = sc_core::SC_FULL;       // legacy
+inline constexpr sc_core::sc_verbosity INTERNAL = sc_core::SC_DEBUG;   // 500
+inline constexpr sc_core::sc_verbosity TRACE = sc_core::SC_DEBUG;      // legacy
+inline constexpr sc_core::sc_verbosity TRACEALL = sc_core::SC_DEBUG;   // legacy
+inline constexpr sc_core::sc_verbosity DBGTRACE = sc_core::SC_DEBUG;   // legacy
+// Sentinel "not resolved" marker — an int (matches sc_core::SC_UNSET), not a
+// real level, hence not typed sc_verbosity.
+inline constexpr int UNSET = sc_core::SC_UNSET;
+} // namespace log
+
+//! Level<->text convenience.  SystemC core deliberately ships no level-name
+//! mapping (the kernel only needs as_log(int)); the textual names and string
+//! parsing live here in the SCP layer.  These also accept the legacy SCP
+//! spellings (FATAL/ERROR/WARN/WARNING/INFO/DEBUG/TRACE/TRACEALL/DBGTRACE).
+inline const std::map<sc_core::sc_verbosity, std::string>& level_name_map() {
+    static const std::map<sc_core::sc_verbosity, std::string> m = {
+        { sc_core::SC_LOW, "CRITICAL" }, { sc_core::SC_MEDIUM, "ALERT" },
+        { sc_core::SC_HIGH, "NOTE" },    { sc_core::SC_FULL, "DETAIL" },
+        { sc_core::SC_DEBUG, "INTERNAL" }
+    };
+    return m;
+}
+//! Human-readable name for a level (returns "NONE" for SC_NONE / unmapped).
+inline std::string level_name(sc_core::sc_verbosity v) {
+    auto it = level_name_map().find(v);
+    return it == level_name_map().end() ? std::string("NONE") : it->second;
+}
+//! Parse a level name (canonical or legacy) into a verbosity value.
+inline sc_core::sc_verbosity as_log(const std::string& name) {
+    if (name == "NONE") return sc_core::SC_NONE;
+    for (auto& [lvl, str] : level_name_map())
+        if (name == str) return lvl;
+    if (name == "FATAL" || name == "ERROR") return sc_core::SC_LOW;     // CRITICAL
+    if (name == "WARN" || name == "WARNING") return sc_core::SC_MEDIUM; // ALERT
+    if (name == "INFO") return sc_core::SC_HIGH;                        // NOTE
+    if (name == "DEBUG") return sc_core::SC_FULL;                       // DETAIL
+    if (name == "TRACE" || name == "TRACEALL" || name == "DBGTRACE")
+        return sc_core::SC_DEBUG;                                       // INTERNAL
+    return sc_core::SC_DEBUG;
+}
 
 /**
  * @enum DisplayName
@@ -80,7 +137,7 @@ enum class DisplayName {
  * class follows the builder pattern.
  */
 struct LogConfig {
-    log level{ log::WARN };
+    sc_core::sc_verbosity level{ log::WARN };
     unsigned msg_type_field_width{ 24 };
     bool print_sys_time{ false };
     bool print_sim_time{ true };
@@ -95,7 +152,7 @@ struct LogConfig {
     DisplayName display_name{ DisplayName::AUTO };
 
     //! set the logging level
-    LogConfig& logLevel(log);
+    LogConfig& logLevel(sc_core::sc_verbosity);
     //! define the width of the message field, 0 to disable,
     //! std::numeric_limits<unsigned>::max() for arbitrary width
     LogConfig& msgTypeFieldWidth(unsigned);
@@ -133,7 +190,7 @@ struct LogConfig {
  *
  * @param level the logging level
  */
-void set_logging_level(log level);
+void set_logging_level(sc_core::sc_verbosity level);
 /**
  * @fn void set_display_name_style(DisplayName)
  * @brief change the display name style at runtime
@@ -160,14 +217,14 @@ void reset_logging();
  * @param name the scname or feature to match (e.g. "top.prod", "dmi")
  * @param level the log level to set
  */
-void set_log_level(const std::string& name, log level);
+void set_log_level(const std::string& name, sc_core::sc_verbosity level);
 /**
  * @fn log get_logging_level()
  * @brief get the SystemC logging level
  *
  * @return the logging level
  */
-log get_logging_level();
+sc_core::sc_verbosity get_logging_level();
 /**
  * @fn void set_cycle_base(sc_core::sc_time)
  * @brief sets the cycle base for cycle based logging
@@ -211,7 +268,7 @@ public:
      * @param type_field_width the width of the type field in the output
      * @param print_time whether to print the system time stamp
      */
-    explicit LogHandler(log level, unsigned type_field_width = 24,
+    explicit LogHandler(sc_core::sc_verbosity level, unsigned type_field_width = 24,
                        bool print_time = false);
     /**
      * @brief Destructor that ensures logging resources are cleaned up
